@@ -533,7 +533,7 @@ describe("tool catalog contracts", () => {
     expect(parsed.error?.issues).toBeUndefined();
   });
 
-  test("operations policy schema and example include safe git operation defaults", () => {
+  test("operations policy schema includes safe git operation defaults", () => {
     const parsed = RepoReaderConfigSchema.safeParse({
       repos: [{
         repo_id: "fixture",
@@ -556,15 +556,23 @@ describe("tool catalog contracts", () => {
       max_paths_per_operation: 25
     });
 
-    const example = JSON.parse(readFileSync("config.example.json", "utf8")) as {
-      repos?: Array<{ operations?: {
-        enabled?: boolean;
-        git_stage_enabled?: boolean;
-        git_commit_enabled?: boolean;
-        max_paths_per_operation?: number;
-      } }>;
-    };
-    expect(example.repos?.[0]?.operations).toEqual({
+    expect(parsed.data?.repos[0]?.operations).toMatchObject({
+      cleanup_enabled: false,
+      cleanup_allowed_globs: [
+        ".chatgpt/tool-tests/**",
+        ".chatgpt/backups/**",
+        ".chatgpt/audits/**",
+        ".chatgpt/backlog/**",
+        ".chatgpt/codex-runs/**",
+        "coverage/**",
+        "dist/**",
+        "test-results/**"
+      ]
+    });
+    expect(RepoReaderConfigSchema.parse({
+      repos: [{ repo_id: "fixture", display_name: "Fixture", root: "/tmp/fixture" }],
+      limits: {}
+    }).repos[0]?.operations).toEqual({
       enabled: false,
       git_stage_enabled: false,
       git_commit_enabled: false,
@@ -583,7 +591,7 @@ describe("tool catalog contracts", () => {
     });
   });
 
-  test("write policy schema and example expose current defaults without legacy backup config", () => {
+  test("write policy schema exposes current defaults without legacy backup config", () => {
     const parsed = RepoReaderConfigSchema.safeParse({
       repos: [{
         repo_id: "fixture",
@@ -598,11 +606,12 @@ describe("tool catalog contracts", () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.repos[0]?.writes.max_bytes_per_write).toBe(1048576);
 
-    const example = JSON.parse(readFileSync("config.example.json", "utf8")) as {
-      repos?: Array<{ writes?: Record<string, unknown> }>;
-    };
-    expect(example.repos?.[0]?.writes?.max_bytes_per_write).toBe(1048576);
-    expect(example.repos?.[0]?.writes?.allowed_globs).toEqual([
+    const defaultWrites = RepoReaderConfigSchema.parse({
+      repos: [{ repo_id: "fixture", display_name: "Fixture", root: "/tmp/fixture" }],
+      limits: {}
+    }).repos[0]?.writes;
+    expect(defaultWrites?.max_bytes_per_write).toBe(1048576);
+    expect(defaultWrites?.allowed_globs).toEqual([
       ".chatgpt/**",
       ".codex/**",
       "docs/**",
@@ -615,16 +624,31 @@ describe("tool catalog contracts", () => {
       "LICENSE",
       ".gitignore"
     ]);
-    expect(example.repos?.[0]?.writes?.allowed_globs).toContain(".gitignore");
-    expect(example.repos?.[0]?.writes).not.toHaveProperty("require_expected_sha256_for_overwrite");
-    expect(example.repos?.[0]?.writes).not.toHaveProperty("create_backup_on_overwrite");
-    expect(example.repos?.[0]?.writes).not.toHaveProperty("backup_dir");
-    expect(example.repos?.[0]?.writes?.denied_globs).toContain("**/node_modules/**");
-    expect(example.repos?.[0]?.writes?.denied_globs).toContain("**/dist/**");
-    expect(example.repos?.[0]?.writes?.denied_globs).toContain("**/.next/**");
-    expect(example.repos?.[0]?.writes?.denied_globs).toContain("**/coverage/**");
-    expect(example.repos?.[0]?.writes?.denied_globs).not.toContain("**/*secret*");
-    expect(example.repos?.[0]?.writes?.denied_globs).not.toContain("**/*credential*");
+    expect(defaultWrites?.allowed_globs).toContain(".gitignore");
+    expect(defaultWrites).not.toHaveProperty("require_expected_sha256_for_overwrite");
+    expect(defaultWrites).not.toHaveProperty("create_backup_on_overwrite");
+    expect(defaultWrites).not.toHaveProperty("backup_dir");
+    expect(defaultWrites?.denied_globs).toContain("**/node_modules/**");
+    expect(defaultWrites?.denied_globs).toContain("**/dist/**");
+    expect(defaultWrites?.denied_globs).toContain("**/.next/**");
+    expect(defaultWrites?.denied_globs).toContain("**/coverage/**");
+    expect(defaultWrites?.denied_globs).not.toContain("**/*secret*");
+    expect(defaultWrites?.denied_globs).not.toContain("**/*credential*");
+  });
+
+  test("config example is a valid empty starter config", () => {
+    const raw = readFileSync("config.example.json", "utf8");
+    const example = JSON.parse(raw) as { repos?: unknown[]; limits?: Record<string, unknown> };
+    const parsed = RepoReaderConfigSchema.safeParse(example);
+
+    expect(parsed.success).toBe(true);
+    expect(example.repos).toEqual([]);
+    expect(example.limits).toEqual({
+      max_files: 50,
+      max_bytes_per_file: 128000,
+      max_total_bytes: 750000
+    });
+    expect(raw).not.toContain("/absolute/path/to/repo");
   });
 
   test("repo_read_many advertises exclude globs and file content output", () => {

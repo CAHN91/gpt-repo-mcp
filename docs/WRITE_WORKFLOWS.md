@@ -10,7 +10,11 @@ Writes are disabled by default. A repository must opt in through `config.local.j
 
 ## Enable Writes
 
-Start from `config.example.json`, then opt in only for repositories where writes are intended:
+Copy `config.example.json` to `config.local.json` to create a valid empty starter config, then add repositories and opt in only where writes are intended:
+
+```bash
+cp config.example.json config.local.json
+```
 
 For normal local setup, prefer the CLI modes:
 
@@ -28,7 +32,7 @@ npm run add -- /path/to/repo --mode ship
 
 No mode adds shell execution or push, pull, reset, checkout, switch, rebase, merge, stash, clean, force, or branch deletion tools.
 
-Manual config remains supported:
+Manual config remains supported. The following is a full policy-shape example for documentation; replace `/absolute/path/to/repo` with a real local repository path before using it:
 
 ```json
 {

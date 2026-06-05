@@ -71,7 +71,7 @@ Run `npm run build`.
 
 ## Create Local Config
 
-Run `cp config.example.json config.local.json`. `config.local.json` is ignored by git and should stay uncommitted.
+Run `cp config.example.json config.local.json`. This creates a valid empty local config with no approved repositories. `config.local.json` is ignored by git and should stay uncommitted.
 
 ## Add A Repository
 
@@ -79,7 +79,7 @@ Run `cp config.example.json config.local.json`. `config.local.json` is ignored b
 npm run add -- /path/to/your/repo
 ```
 
-The CLI adds an approved local repository root to `config.local.json`. It prompts for a permission mode when stdin is interactive: `read`, `write`, or `ship`. Non-interactive runs default to read mode.
+The CLI adds the first approved local repository root to the empty `config.local.json`. It prompts for a permission mode when stdin is interactive: `read`, `write`, or `ship`. Non-interactive runs default to read mode.
 
 Use explicit mode flags when you want predictable setup:
 
@@ -121,7 +121,7 @@ Run `npm run check:config`.
 
 ## Doctor
 
-Run `npm run doctor`. The doctor command checks config validation, package scripts, ngrok availability, tunnel state, port `8787`, and git status without dumping raw config or secrets.
+Run `npm run doctor`. The doctor command checks config validation, package scripts, ngrok availability, tunnel state, port `8787`, and git status without dumping raw config or secrets. Run it after adding a repository for full green status. Before adding a repository, the empty starter config still validates and doctor may report `WARN config has no repositories`.
 
 ## Quickstart: Start MCP And Built-In Tunnel
 

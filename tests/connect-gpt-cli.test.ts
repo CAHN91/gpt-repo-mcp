@@ -63,6 +63,47 @@ describe("connect-gpt config CLI", () => {
     expect(result.stderr).toBe("");
   });
 
+  test("doctor accepts copied empty starter config and warns that no repositories are configured", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
+    const configPath = join(sandbox, "config.local.json");
+    await writeDoctorPackageJson(sandbox);
+    await writeFile(configPath, await readFile(join(process.cwd(), "config.example.json"), "utf8"));
+
+    const result = await runCli(["doctor", "--config", configPath], sandbox, {
+      ngrokInstalled: async () => true,
+      hasActiveNgrokTunnel: async () => false,
+      isPortInUse: async () => false,
+      isGitWorktreeDirty: async () => false
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("PASS config validated: 0 repo(s)");
+    expect(result.stdout).toContain("WARN config has no repositories; add one before using npm run connect");
+    expect(result.stdout).not.toContain("ROOT_MISSING");
+    expect(result.stderr).toBe("");
+  });
+
+  test("add --mode read adds the first repo to a copied empty starter config", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
+    const configPath = join(sandbox, "config.local.json");
+    const repoRoot = join(sandbox, "repo");
+    await mkdir(join(repoRoot, ".git"), { recursive: true });
+    await writeFile(configPath, await readFile(join(process.cwd(), "config.example.json"), "utf8"));
+
+    const added = await runCli(["add", repoRoot, "--id", "repo", "--mode", "read", "--config", configPath], sandbox);
+
+    expect(added.code).toBe(0);
+    const written = JSON.parse(await readFile(configPath, "utf8")) as {
+      repos: Array<{ repo_id: string; writes?: { enabled?: boolean }; operations?: { enabled?: boolean } }>;
+    };
+    expect(written.repos).toHaveLength(1);
+    expect(written.repos[0]).toMatchObject({
+      repo_id: "repo",
+      writes: { enabled: false },
+      operations: { enabled: false }
+    });
+  });
+
   test("supports add/list/remove/check flow", async () => {
     const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
     const configPath = join(sandbox, "config.local.json");

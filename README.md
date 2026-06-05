@@ -40,6 +40,7 @@ git clone https://github.com/CAHN91/gpt-repo-mcp.git
 cd gpt-repo-mcp
 npm install
 npm run build
+cp config.example.json config.local.json
 ```
 
 ### 2. Add Your Repo
@@ -47,6 +48,8 @@ npm run build
 ```bash
 npm run add -- /path/to/your/repo
 ```
+
+The copied starter config is valid and empty. This command adds the first approved repository.
 
 Interactive terminals prompt for a permission mode: `read`, `write`, or `ship`.
 

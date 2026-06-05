@@ -146,6 +146,21 @@ describe("package startup scripts", () => {
     expect(connectionOptions).toContain("SETUP.md#install-ngrok-from-zero");
   });
 
+  test("setup docs explain the empty starter config flow", async () => {
+    const readme = await readFile(join(process.cwd(), "README.md"), "utf8");
+    const setup = await readFile(join(process.cwd(), "docs", "SETUP.md"), "utf8");
+    const workflows = await readFile(join(process.cwd(), "docs", "WRITE_WORKFLOWS.md"), "utf8");
+
+    for (const doc of [readme, setup]) {
+      expect(doc).toContain("cp config.example.json config.local.json");
+      expect(doc).toContain("empty");
+      expect(doc).toContain("npm run add -- /path/to/your/repo");
+    }
+    expect(setup).toContain("WARN config has no repositories");
+    expect(workflows).toContain("Manual config remains supported");
+    expect(workflows).toContain("\"root\": \"/absolute/path/to/repo\"");
+  });
+
   test("ChatGPT connector docs reference sanitized local assets", async () => {
     const chatgptConnect = await readFile(join(process.cwd(), "docs", "CHATGPT_CONNECT.md"), "utf8");
     const assetsReadme = await readFile(join(process.cwd(), "docs", "assets", "README.md"), "utf8");
