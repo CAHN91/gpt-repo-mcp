@@ -5,7 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { RootRegistry } from "./services/root-registry.js";
 import { createMcpServer } from "./register.js";
 import type { RuntimeContext } from "./runtime/context.js";
-import { isAuthorizedMcpPath, sanitizeMcpRouteForAudit } from "./runtime/mcp-routes.js";
+import { buildMcpRoutePatterns, isAuthorizedMcpPath, sanitizeMcpRouteForAudit } from "./runtime/mcp-routes.js";
 import {
   createRequestId,
   requestAudit,
@@ -26,7 +26,7 @@ const app = express();
 app.use(express.json({ limit: "2mb" }));
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
-const mcpRoutePatterns = publicPathToken ? ["/mcp", "/t/:publicPathToken/mcp"] : ["/mcp"];
+const mcpRoutePatterns = buildMcpRoutePatterns(publicPathToken);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, name: "gpt-repo-mcp" });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildMcpRoutePatterns,
   buildPublicMcpPath,
   isAuthorizedMcpPath,
   sanitizeMcpRouteForAudit
@@ -7,6 +8,7 @@ import {
 
 describe("public MCP path token routing", () => {
   test("keeps /mcp authorized when no public path token is configured", () => {
+    expect(buildMcpRoutePatterns(undefined)).toEqual(["/mcp"]);
     expect(isAuthorizedMcpPath("/mcp", undefined)).toBe(true);
     expect(isAuthorizedMcpPath("/t/anything/mcp", undefined)).toBe(false);
   });
@@ -14,6 +16,7 @@ describe("public MCP path token routing", () => {
   test("requires the token-prefixed path when a public path token is configured", () => {
     const token = "0123456789abcdef0123456789abcdef";
 
+    expect(buildMcpRoutePatterns(token)).toEqual(["/t/:publicPathToken/mcp"]);
     expect(buildPublicMcpPath(token)).toBe("/t/0123456789abcdef0123456789abcdef/mcp");
     expect(isAuthorizedMcpPath("/mcp", token)).toBe(false);
     expect(isAuthorizedMcpPath("/t/0123456789abcdef0123456789abcdef/mcp", token)).toBe(true);
