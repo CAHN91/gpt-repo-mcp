@@ -14,6 +14,7 @@ import {
 } from "./runtime/telemetry.js";
 
 const port = Number(process.env.PORT ?? 8787);
+const host = process.env.HOST ?? process.env.GPT_REPO_HOST ?? "127.0.0.1";
 const configPath = process.env.GPT_REPO_CONFIG ?? process.env.REPO_READER_CONFIG;
 const publicPathToken = process.env.GPT_REPO_PUBLIC_PATH_TOKEN ?? process.env.REPO_READER_PUBLIC_PATH_TOKEN;
 
@@ -236,7 +237,7 @@ app.delete(mcpRoutePatterns, async (req: Request, res: Response) => {
   });
 });
 
-app.listen(port, () => {
+app.listen(port, host, () => {
   const localPath = publicPathToken ? "/t/[token]/mcp" : "/mcp";
-  console.error(`gpt-repo-mcp listening on http://localhost:${port}${localPath}`);
+  console.error(`gpt-repo-mcp listening on http://${host}:${port}${localPath}`);
 });

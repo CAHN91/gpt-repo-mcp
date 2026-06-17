@@ -27,7 +27,7 @@ export class WritePolicy {
     this.config = {
       enabled: config.enabled ?? DEFAULT_WRITE_POLICY.enabled,
       allowed_globs: config.allowed_globs ?? [...DEFAULT_WRITE_POLICY.allowed_globs],
-      denied_globs: config.denied_globs ?? [...DEFAULT_WRITE_POLICY.denied_globs],
+      denied_globs: [...DEFAULT_WRITE_POLICY.denied_globs, ...(config.denied_globs ?? [])],
       max_bytes_per_write: config.max_bytes_per_write ?? DEFAULT_WRITE_POLICY.max_bytes_per_write
     };
     this.allowedMatcher.add(this.config.allowed_globs);

@@ -37,6 +37,18 @@ describe("PathSandbox", () => {
     });
   });
 
+  test("reports canonical repo path for in-repo symlink aliases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "repo-reader-"));
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(root, ".env"), "API_TOKEN=secret\n");
+    await symlink(join(root, ".env"), join(root, "docs", "public-env.md"));
+
+    const resolved = await new PathSandbox(root).resolve("docs/public-env.md");
+
+    expect(resolved.repoPath).toBe("docs/public-env.md");
+    expect(resolved.canonicalRepoPath).toBe(".env");
+  });
+
   test("detects nested repositories without treating them as normal files", async () => {
     const root = await mkdtemp(join(tmpdir(), "repo-reader-"));
     await mkdir(join(root, "vendor", "lib", ".git"), { recursive: true });

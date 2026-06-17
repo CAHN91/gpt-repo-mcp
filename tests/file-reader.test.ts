@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { FileReader } from "../src/services/file-reader.js";
@@ -26,6 +26,18 @@ describe("FileReader", () => {
     const reader = new FileReader(new PathSandbox(fixture.root));
 
     await expect(reader.read({ path: ".env", override_default_excludes: true })).rejects.toMatchObject({
+      code: "SECRET_CANDIDATE_BLOCKED"
+    });
+  });
+
+  test("blocks in-repo symlink aliases to secret candidate paths", async () => {
+    const fixture = await createRepoFixture();
+    const reader = new FileReader(new PathSandbox(fixture.root));
+    await mkdir(join(fixture.root, "secrets"), { recursive: true });
+    await writeFile(join(fixture.root, "secrets", "api.txt"), "not secret\n");
+    await symlink(join(fixture.root, "secrets"), join(fixture.root, "docs", "public-files"));
+
+    await expect(reader.read({ path: "docs/public-files/api.txt", override_default_excludes: true })).rejects.toMatchObject({
       code: "SECRET_CANDIDATE_BLOCKED"
     });
   });

@@ -12,7 +12,12 @@ export type BoundaryClassification =
 export class PathSandbox {
   constructor(private readonly root: string) {}
 
-  async resolve(repoPath: string): Promise<{ repoPath: string; absolutePath: string; stat: Awaited<ReturnType<typeof lstat>> }> {
+  async resolve(repoPath: string): Promise<{
+    repoPath: string;
+    canonicalRepoPath: string;
+    absolutePath: string;
+    stat: Awaited<ReturnType<typeof lstat>>;
+  }> {
     const normalized = validateRepoPath(repoPath);
     const absolutePath = join(this.root, normalized);
     const [rootReal, targetReal, stat] = await Promise.all([
@@ -28,7 +33,12 @@ export class PathSandbox {
       throw new RepoReaderError("UNSUPPORTED_FILE_TYPE", `Unsupported file type: ${normalized}`);
     }
 
-    return { repoPath: normalized, absolutePath: targetReal, stat };
+    return {
+      repoPath: normalized,
+      canonicalRepoPath: toRepoPath(relative(rootReal, targetReal)),
+      absolutePath: targetReal,
+      stat
+    };
   }
 
   async classifyBoundary(repoPath: string): Promise<BoundaryClassification> {
@@ -69,4 +79,11 @@ export function validateRepoPath(repoPath: string): string {
 function isWithin(rootPath: string, targetPath: string): boolean {
   const rel = relative(resolve(rootPath), resolve(targetPath));
   return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
+}
+
+function toRepoPath(platformRelativePath: string): string {
+  if (platformRelativePath === "") {
+    return ".";
+  }
+  return platformRelativePath.split(sep).join(posix.sep);
 }

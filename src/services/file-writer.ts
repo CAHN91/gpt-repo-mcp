@@ -16,6 +16,7 @@ const textDecoder = new TextDecoder("utf-8", { fatal: true });
 type ExistingTarget = {
   exists: true;
   repoPath: string;
+  canonicalRepoPath: string;
   absolutePath: string;
   oldContent: Buffer;
   oldText: string;
@@ -25,6 +26,7 @@ type ExistingTarget = {
 type NewTarget = {
   exists: false;
   repoPath: string;
+  canonicalRepoPath: string;
   absolutePath: string;
 };
 
@@ -54,15 +56,15 @@ export class FileWriter {
     const action = input.action ?? "write";
     const repoPath = validateRepoPath(input.path);
 
-    this.policy.assertAllowed({ path: repoPath, bytes: 0, action });
+    this.assertAllowedForPaths([repoPath], 0, action);
 
-    const target = await this.resolveTarget(repoPath, Boolean(input.create_dirs));
+    const target = await this.resolveTarget(repoPath, Boolean(input.create_dirs), action);
     const computed = this.computeNextContent(action, input, target);
 
     if (this.secretScanner.hasSecretValue(computed.nextText)) {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret content blocked: ${repoPath}`);
     }
-    this.policy.assertAllowed({ path: repoPath, bytes: computed.nextContent.byteLength, action });
+    this.assertAllowedForPaths([repoPath, target.canonicalRepoPath], computed.nextContent.byteLength, action);
 
     const oldSha256 = target.exists ? target.oldSha256 : undefined;
     const newSha256 = sha256(computed.nextContent);
@@ -96,9 +98,9 @@ export class FileWriter {
   async writeGroupedEdit(input: Omit<WriteGroupedEditChange, "type"> & { dry_run?: boolean }): Promise<WriteGroupedEditResult> {
     const repoPath = validateRepoPath(input.path);
 
-    this.policy.assertAllowed({ path: repoPath, bytes: 0, action: "edit" });
+    this.assertAllowedForPaths([repoPath], 0, "edit");
 
-    const target = await this.resolveTarget(repoPath, false);
+    const target = await this.resolveTarget(repoPath, false, "edit");
     if (!target.exists) {
       throw new RepoReaderError("WRITE_TARGET_MISSING", `File does not exist: ${target.repoPath}`);
     }
@@ -111,7 +113,7 @@ export class FileWriter {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret content blocked: ${repoPath}`);
     }
     const nextContent = Buffer.from(nextText, "utf8");
-    this.policy.assertAllowed({ path: repoPath, bytes: nextContent.byteLength, action: "edit" });
+    this.assertAllowedForPaths([repoPath, target.canonicalRepoPath], nextContent.byteLength, "edit");
 
     const oldSha256 = target.oldSha256;
     const newSha256 = sha256(nextContent);
@@ -187,17 +189,19 @@ export class FileWriter {
     return { action, nextText, nextContent: Buffer.from(nextText, "utf8") };
   }
 
-  private async resolveTarget(repoPath: string, createDirs: boolean): Promise<WriteTarget> {
+  private async resolveTarget(repoPath: string, createDirs: boolean, action: WriteAction | "edit"): Promise<WriteTarget> {
     try {
       const resolved = await this.sandbox.resolve(repoPath);
       if (!resolved.stat.isFile()) {
         throw new RepoReaderError("UNSUPPORTED_FILE_TYPE", `Not a regular file: ${resolved.repoPath}`);
       }
+      this.assertAllowedForPaths([resolved.repoPath, resolved.canonicalRepoPath], 0, action);
       const oldContent = await readFile(resolved.absolutePath);
       const oldText = decodeUtf8(oldContent, resolved.repoPath);
       return {
         exists: true,
         repoPath: resolved.repoPath,
+        canonicalRepoPath: resolved.canonicalRepoPath,
         absolutePath: resolved.absolutePath,
         oldContent,
         oldText,
@@ -209,19 +213,33 @@ export class FileWriter {
       }
     }
 
-    await this.ensureParentDirectory(repoPath, createDirs);
+    const target = await this.ensureParentDirectory(repoPath, createDirs);
+    this.assertAllowedForPaths([repoPath, target.canonicalRepoPath], 0, action);
     return {
       exists: false,
       repoPath,
-      absolutePath: join(this.root, repoPath)
+      canonicalRepoPath: target.canonicalRepoPath,
+      absolutePath: target.absolutePath
     };
   }
 
-  private async ensureParentDirectory(repoPath: string, createDirs: boolean): Promise<void> {
+  private assertAllowedForPaths(paths: string[], bytes: number, action: WriteAction | "edit"): void {
+    for (const path of [...new Set(paths)]) {
+      this.policy.assertAllowed({ path, bytes, action });
+    }
+  }
+
+  private async ensureParentDirectory(
+    repoPath: string,
+    createDirs: boolean
+  ): Promise<{ absolutePath: string; canonicalRepoPath: string }> {
     const parentPath = posix.dirname(repoPath);
     if (parentPath === ".") {
       await assertWithinRoot(this.root, this.root);
-      return;
+      return {
+        absolutePath: join(this.root, repoPath),
+        canonicalRepoPath: repoPath
+      };
     }
 
     const segments = normalizeRepoPath(parentPath).split("/").filter(Boolean);
@@ -249,6 +267,22 @@ export class FileWriter {
         await assertWithinRoot(this.root, absolutePath);
       }
     }
+
+    const parentAbsolutePath = join(this.root, parentPath);
+    const [rootReal, parentReal] = await Promise.all([
+      realpath(this.root),
+      realpath(parentAbsolutePath)
+    ]);
+    const rel = relative(resolve(rootReal), resolve(parentReal));
+    if (rel !== "" && (rel.startsWith("..") || rel.includes(`..${sep}`))) {
+      throw new RepoReaderError("SYMLINK_ESCAPE_REJECTED", `Path escapes approved repository: ${parentPath}`);
+    }
+    const canonicalParentPath = rel === "" ? "." : rel.split(sep).join(posix.sep);
+    const targetName = basename(repoPath);
+    return {
+      absolutePath: join(parentReal, targetName),
+      canonicalRepoPath: canonicalParentPath === "." ? targetName : `${canonicalParentPath}/${targetName}`
+    };
   }
 }
 

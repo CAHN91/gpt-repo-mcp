@@ -29,14 +29,17 @@ export class FileReader {
     }
 
     const warnings: string[] = [];
-    if (this.ignoreEngine.isIgnored(resolved.repoPath) && !options.override_default_excludes) {
-      throw new RepoReaderError("DEFAULT_EXCLUDE_BLOCKED", `Path is excluded by default: ${resolved.repoPath}`);
+    const policyPaths = uniquePaths([resolved.repoPath, resolved.canonicalRepoPath]);
+    const ignoredPath = policyPaths.find((path) => this.ignoreEngine.isIgnored(path));
+    if (ignoredPath && !options.override_default_excludes) {
+      throw new RepoReaderError("DEFAULT_EXCLUDE_BLOCKED", `Path is excluded by default: ${ignoredPath}`);
     }
-    if (this.ignoreEngine.isIgnored(resolved.repoPath) && options.override_default_excludes) {
-      warnings.push(`Read default-excluded path with override: ${resolved.repoPath}`);
+    if (ignoredPath && options.override_default_excludes) {
+      warnings.push(`Read default-excluded path with override: ${ignoredPath}`);
     }
-    if (this.ignoreEngine.isSensitiveCandidate(resolved.repoPath)) {
-      throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret candidate blocked: ${resolved.repoPath}`);
+    const sensitivePath = policyPaths.find((path) => this.ignoreEngine.isSensitiveCandidate(path));
+    if (sensitivePath) {
+      throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret candidate blocked: ${sensitivePath}`);
     }
 
     const maxBytes = Math.min(options.max_bytes ?? DEFAULT_LIMITS.max_bytes_per_file, DEFAULT_LIMITS.max_bytes_per_file);
@@ -50,7 +53,7 @@ export class FileReader {
     }
 
     const rawText = content.toString("utf8");
-    if (isPublicEnvTemplatePath(resolved.repoPath) && this.secretScanner.hasSecretValue(rawText)) {
+    if (policyPaths.some(isPublicEnvTemplatePath) && this.secretScanner.hasSecretValue(rawText)) {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret candidate blocked: ${resolved.repoPath}`);
     }
     const text = this.secretScanner.redact(rawText);
@@ -72,4 +75,8 @@ export class FileReader {
       warnings
     };
   }
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths)];
 }

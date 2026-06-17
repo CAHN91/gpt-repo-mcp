@@ -52,6 +52,9 @@
     "ignore": "^7.0.5",
     "zod": "^4.1.12"
   },
+  "overrides": {
+    "hono": "^4.12.25"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/express": "^5.0.5",

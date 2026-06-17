@@ -1,11 +1,12 @@
-import { readFile } from "node:fs/promises";
 import { DEFAULT_LIMITS } from "../policies/limits.js";
 import { RepoReaderError } from "../runtime/errors.js";
+import { readFilePrefix } from "./bounded-read.js";
 import { FileClassifier } from "./file-classifier.js";
 import { isExcludedByGlob, matchesGlob } from "./glob-service.js";
 import { IgnoreEngine } from "./ignore-engine.js";
 import { PathSandbox } from "./path-sandbox.js";
 import { RepoTreeService } from "./repo-tree-service.js";
+import { SecretScanner } from "./secret-scanner.js";
 
 export type SearchOptions = {
   query: string;
@@ -20,6 +21,7 @@ export type SearchOptions = {
 export class SearchService {
   private readonly ignoreEngine = new IgnoreEngine();
   private readonly classifier = new FileClassifier(this.ignoreEngine);
+  private readonly secretScanner = new SecretScanner();
 
   constructor(private readonly root: string, private readonly sandbox: PathSandbox) {}
 
@@ -52,12 +54,22 @@ export class SearchService {
       if (this.ignoreEngine.isSensitiveCandidate(entry.path)) {
         continue;
       }
+      const maxBytes = DEFAULT_LIMITS.max_bytes_per_file;
+      if (typeof entry.size_bytes === "number" && entry.size_bytes > maxBytes) {
+        warnings.push(`Skipped ${entry.path}: file exceeds max_bytes_per_file (${maxBytes}).`);
+        continue;
+      }
       const resolved = await this.sandbox.resolve(entry.path);
       const classification = await this.classifier.classify(entry.path, resolved.absolutePath);
       if (classification.is_binary) {
         continue;
       }
-      const text = await readFile(resolved.absolutePath, "utf8");
+      const { buffer, truncated } = await readFilePrefix(resolved.absolutePath, maxBytes);
+      if (truncated) {
+        warnings.push(`Skipped ${entry.path}: file exceeds max_bytes_per_file (${maxBytes}).`);
+        continue;
+      }
+      const text = this.secretScanner.redact(buffer.toString("utf8"));
       const lines = text.split(/\r?\n/);
       lines.forEach((lineText, index) => {
         const column = matcher.column(lineText);
@@ -91,6 +103,13 @@ export class SearchService {
 }
 
 function createMatcher(options: SearchOptions): { column: (line: string) => number | undefined } {
+  if (options.query.length > DEFAULT_LIMITS.max_search_query_length) {
+    throw new RepoReaderError(
+      "VALIDATION_ERROR",
+      `Search query exceeds max length (${DEFAULT_LIMITS.max_search_query_length}).`
+    );
+  }
+
   if (options.mode === "regex") {
     try {
       const regex = new RegExp(options.query, "i");

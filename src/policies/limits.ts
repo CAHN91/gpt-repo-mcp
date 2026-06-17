@@ -2,6 +2,7 @@ export const DEFAULT_LIMITS = {
   max_files: 50,
   max_bytes_per_file: 128_000,
   max_total_bytes: 750_000,
+  max_search_query_length: 200,
   max_search_results: 100,
   max_tree_entries: 2_000,
   max_task_inventory_files: 5_000,

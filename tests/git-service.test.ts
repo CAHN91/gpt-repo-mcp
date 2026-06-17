@@ -60,6 +60,38 @@ describe("GitService", () => {
     } satisfies Partial<RepoReaderError>);
   });
 
+  test("rejects option-like git revision inputs", async () => {
+    const root = await createGitFixture();
+    const service = new GitService(root);
+
+    await expect(service.diff({ base: "--output=/tmp/leak.diff" })).rejects.toMatchObject({
+      code: "VALIDATION_ERROR"
+    } satisfies Partial<RepoReaderError>);
+
+    await expect(service.diff({ base: "HEAD", compare: "--no-index" })).rejects.toMatchObject({
+      code: "VALIDATION_ERROR"
+    } satisfies Partial<RepoReaderError>);
+  });
+
+  test("allows safe revision inputs", async () => {
+    const root = await createGitFixture();
+    const result = await new GitService(root).diff({ base: "HEAD" });
+
+    expect(result.base).toBe("HEAD");
+    expect(result.files).toEqual([]);
+  });
+
+  test("redacts secret-looking values from diff hunks", async () => {
+    const root = await createGitFixture();
+    await writeFile(join(root, "src", "app.ts"), "OPENAI_API_KEY=sk-realSecretValue123\n");
+
+    const result = await new GitService(root).diff({});
+    const serialized = JSON.stringify(result.files);
+
+    expect(serialized).toContain("[REDACTED_SECRET]");
+    expect(serialized).not.toContain("sk-realSecretValue123");
+  });
+
   test("truncates large diffs with warning", async () => {
     const root = await createGitFixture();
     await writeFile(join(root, "src", "app.ts"), Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n"));

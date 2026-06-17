@@ -296,6 +296,20 @@ describe("FileWriter", () => {
     })).rejects.toMatchObject({ code: "WRITE_DENIED_GLOB" });
   });
 
+  test("custom denied globs cannot replace hard default denials", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, {
+      enabled: true,
+      allowed_globs: ["**"],
+      denied_globs: ["docs/private/**"]
+    });
+
+    await expect(writer.write({
+      path: "dist/generated.js",
+      content: "generated\n"
+    })).rejects.toMatchObject({ code: "WRITE_DENIED_GLOB" });
+  });
+
   test("broad write policy rejects nested dependency and generated paths", async () => {
     const fixture = await createRepoFixture();
     const writer = createWriter(fixture.root, { enabled: true, allowed_globs: ["**"] });
@@ -390,6 +404,18 @@ describe("FileWriter", () => {
       path: "docs/outside-dir/escape.md",
       content: "escape\n"
     })).rejects.toMatchObject({ code: "SYMLINK_ESCAPE_REJECTED" });
+  });
+
+  test("write policy is enforced against canonical paths through in-repo symlink parents", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true, allowed_globs: ["docs/**"] });
+    await symlink(join(fixture.root, "dist"), join(fixture.root, "docs", "dist-link"));
+
+    await expect(writer.write({
+      path: "docs/dist-link/generated.js",
+      content: "generated\n",
+      create_dirs: true
+    })).rejects.toMatchObject({ code: "WRITE_DENIED_GLOB" });
   });
 
   test("invalid UTF-8 edit target is rejected", async () => {

@@ -3,10 +3,15 @@ import { promisify } from "node:util";
 import { DEFAULT_LIMITS } from "../policies/limits.js";
 import { RepoReaderError } from "../runtime/errors.js";
 import { validateRepoPath } from "./path-sandbox.js";
+import { SecretScanner } from "./secret-scanner.js";
 
 const execFileAsync = promisify(execFile);
+const GIT_REF_MAX_LENGTH = 200;
+const SAFE_GIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+~^-]*$/;
 
 export class GitService {
+  private readonly secretScanner = new SecretScanner();
+
   constructor(private readonly root: string) {}
 
   async status() {
@@ -40,25 +45,25 @@ export class GitService {
     context_lines?: number;
   }) {
     const paths = options.paths?.map(validateRepoPath);
-    const args = ["diff", "--find-renames", `--unified=${options.context_lines ?? 3}`];
+    const base = options.base ? validateGitRevision(options.base, "base") : undefined;
+    const compare = options.compare ? validateGitRevision(options.compare, "compare") : undefined;
+    const args = ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", `--unified=${options.context_lines ?? 3}`];
     if (options.staged) {
       args.push("--cached");
     }
-    if (options.base && options.compare) {
-      args.push(`${options.base}...${options.compare}`);
-    } else if (options.base) {
-      args.push(options.base);
+    if (base && compare) {
+      args.push(`${base}...${compare}`);
+    } else if (base) {
+      args.push(base);
     }
-    if (paths?.length) {
-      args.push("--", ...paths);
-    }
+    args.push("--", ...(paths ?? []));
     const maxBytes = Math.min(options.max_bytes ?? DEFAULT_LIMITS.max_diff_bytes, DEFAULT_LIMITS.max_diff_bytes);
     const raw = await this.git(args, DEFAULT_LIMITS.max_diff_bytes + 1);
     const truncated = Buffer.byteLength(raw) > maxBytes;
-    const text = truncated ? raw.slice(0, maxBytes) : raw;
+    const text = this.secretScanner.redact(truncated ? raw.slice(0, maxBytes) : raw);
     return {
-      base: options.base,
-      compare: options.compare,
+      base,
+      compare,
       staged: options.staged,
       unstaged: options.unstaged,
       files: parseDiff(text),
@@ -82,6 +87,35 @@ export class GitService {
       throw new RepoReaderError("GIT_ERROR", message);
     }
   }
+}
+
+function validateGitRevision(ref: string, label: "base" | "compare"): string {
+  if (
+    ref.length === 0 ||
+    ref.length > GIT_REF_MAX_LENGTH ||
+    ref.trim() !== ref ||
+    ref.startsWith("-") ||
+    hasUnsafeGitRevisionCharacter(ref) ||
+    ref.includes("..") ||
+    ref.includes("@{") ||
+    ref.includes("//") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".lock") ||
+    !SAFE_GIT_REF_PATTERN.test(ref)
+  ) {
+    throw new RepoReaderError("VALIDATION_ERROR", `Invalid git ${label} revision.`);
+  }
+  return ref;
+}
+
+function hasUnsafeGitRevisionCharacter(ref: string): boolean {
+  for (const char of ref) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f || char === "\\" || char === ":") {
+      return true;
+    }
+  }
+  return false;
 }
 
 type StatusFile = {
