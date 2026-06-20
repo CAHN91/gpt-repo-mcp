@@ -1408,7 +1408,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user explicitly asks for a Codex prompt, Codex task, or delegation to Codex and wants the prompt returned in chat for review/copying. Does not write files or implement the change.",
+          "description": "Use this when the user explicitly wants chat-copy mode: a Codex prompt returned in chat for review/copying. Does not write files or implement the change. Do not use when Codex will be told to implement .chatgpt/codex-runs/<run_id>/PROMPT.md; use repo_write_codex_task instead.",
           "inputKeys": [
             "acceptance_criteria",
             "allowed_paths",
@@ -1444,7 +1444,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to write a Codex prompt/task/run into the repo for Codex to execute later. Writes only .chatgpt/codex-runs/<run_id>/PROMPT.md and run.json through repo write policy; does not implement, stage, commit, push, or run Codex.",
+          "description": "Use this when the user explicitly asks to create, write, start, resume, or hand off a repo-local Codex prompt/task/run that Codex will execute from the repo. Prefer this by default for repo-local Codex delegation. Writes only .chatgpt/codex-runs/<run_id>/PROMPT.md and run.json through repo write policy; does not implement, stage, commit, push, or run Codex.",
           "inputKeys": [
             "acceptance_criteria",
             "allowed_paths",

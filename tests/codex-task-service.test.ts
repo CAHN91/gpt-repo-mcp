@@ -38,7 +38,8 @@ describe("Codex task services", () => {
     expect(result.prompt_markdown).toContain("Read src/auth.ts and fix expired login handling.");
     expect(result.prompt_markdown).toContain(".chatgpt/codex-runs/2026-06-04T081500Z-fix-login-expiry/RESULT.md");
     expect(result.prompt_markdown).toContain("Do not edit `.chatgpt/**` except this run's `RESULT.md`.");
-    expect(result.next_steps).toContain("Give codex_user_prompt to Codex, or ask ChatGPT to write this task locally with repo_write_codex_task.");
+    expect(result.next_steps).toContain("This tool did not write PROMPT.md. If Codex should implement from a repo path, call repo_write_codex_task with the same task fields before giving codex_user_prompt to Codex.");
+    expect(result.next_steps).toContain("Use codex_user_prompt directly only for chat-copy mode where you paste the rendered prompt into Codex yourself.");
   });
 
   test("write stores prompt and manifest under .chatgpt/codex-runs", async () => {

@@ -462,7 +462,7 @@ Example:
 
 ### `repo_prepare_codex_task`
 
-Renders a Codex-optimized task prompt without writing files. Use this only when the user explicitly asks for a Codex prompt, Codex task, delegation to Codex, or a prompt they can review/copy into Codex. Direct ChatGPT implementation remains the default for normal "fix" or "implement" requests.
+Renders a Codex-optimized task prompt without writing files. Use this only for chat-copy mode when the user explicitly wants a prompt they can review or copy into Codex. Do not use this for repo-local Codex delegation where Codex will be told to implement `.chatgpt/codex-runs/<run_id>/PROMPT.md`; call `repo_write_codex_task` instead so the file exists before Codex runs. Direct ChatGPT implementation remains the default for normal "fix" or "implement" requests.
 
 Input: `repo_id`, `title`, `objective`, optional `context_summary`, `inspect_first[]`, `allowed_paths[]`, `forbidden_paths[]`, `implementation_scope`, `acceptance_criteria[]`, `verification_commands[]`, and `run_id`.
 Output: `run_id`, `prompt_path`, `result_path`, `manifest_path`, `prompt_markdown`, `codex_user_prompt`, `next_steps[]`, and `warnings[]`.
@@ -481,7 +481,7 @@ Example:
 
 ### `repo_write_codex_task`
 
-Writes a repo-local Codex task prompt under `.chatgpt/codex-runs/<run_id>/`. It writes only `PROMPT.md` and `run.json` through the normal write policy. It does not implement code, run Codex, stage, commit, push, or execute shell commands.
+Writes a repo-local Codex task prompt under `.chatgpt/codex-runs/<run_id>/`. Use this by default for repo-local Codex delegation, start/resume flows, or any handoff where Codex will receive `Implement .chatgpt/codex-runs/<run_id>/PROMPT.md`. It writes only `PROMPT.md` and `run.json` through the normal write policy. It does not implement code, run Codex, stage, commit, push, or execute shell commands.
 
 Input: same task fields as `repo_prepare_codex_task`, plus optional `dry_run` and `reason`.
 Output: all prepare fields plus `dry_run` and `written_paths[]`.
@@ -687,7 +687,7 @@ Apply a multi-file edit pack:
 Delegate to Codex:
 
 1. Use direct write tools by default for normal ChatGPT implementation requests.
-2. When the user explicitly asks for Codex delegation, call `repo_prepare_codex_task` for chat-copy mode or `repo_write_codex_task` for repo-local mode.
+2. When the user explicitly asks for Codex delegation, call `repo_write_codex_task` for repo-local mode by default; use `repo_prepare_codex_task` only for chat-copy prompt review/copying.
 3. Give Codex the returned `codex_user_prompt`.
 4. After Codex finishes, call `repo_codex_review` with the returned `run_id`.
 5. Review `codex_result` and `git_review`, then use review-provided commit or recovery payloads after user approval.

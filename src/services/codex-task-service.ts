@@ -32,7 +32,8 @@ export class CodexTaskService {
       prompt_markdown: promptMarkdown,
       codex_user_prompt: `Implement ${paths.promptPath}`,
       next_steps: [
-        "Give codex_user_prompt to Codex, or ask ChatGPT to write this task locally with repo_write_codex_task.",
+        "This tool did not write PROMPT.md. If Codex should implement from a repo path, call repo_write_codex_task with the same task fields before giving codex_user_prompt to Codex.",
+        "Use codex_user_prompt directly only for chat-copy mode where you paste the rendered prompt into Codex yourself.",
         "After Codex finishes, run repo_codex_review for this run_id to review RESULT.md and the git diff."
       ],
       warnings: []

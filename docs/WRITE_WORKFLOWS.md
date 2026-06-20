@@ -156,7 +156,9 @@ Low-level tools remain available for granular control, absent composite payloads
 
 Direct implementation is the default when the user asks ChatGPT to fix, implement, update, or edit code. Use Codex task tools only when the user explicitly asks for a Codex prompt, Codex task, delegation to Codex, or a repo-local Codex run.
 
-For chat-copy mode, call `repo_prepare_codex_task`. It returns a complete Codex prompt in `prompt_markdown` and does not write files:
+For repo-local Codex delegation, call `repo_write_codex_task` by default. Use it whenever Codex will receive an instruction like `Implement .chatgpt/codex-runs/<run_id>/PROMPT.md`; it writes the prompt file before Codex runs.
+
+For chat-copy mode, call `repo_prepare_codex_task` only when the user wants to review or copy the prompt in chat. It returns a complete Codex prompt in `prompt_markdown` and does not write files:
 
 ```json
 {
@@ -169,7 +171,7 @@ For chat-copy mode, call `repo_prepare_codex_task`. It returns a complete Codex 
 }
 ```
 
-For repo-local mode, call `repo_write_codex_task`. It writes:
+For repo-local mode, `repo_write_codex_task` writes:
 
 - `.chatgpt/codex-runs/<run_id>/PROMPT.md`
 - `.chatgpt/codex-runs/<run_id>/run.json`
