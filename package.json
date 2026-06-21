@@ -52,6 +52,9 @@
     "ignore": "^7.0.5",
     "zod": "^4.1.12"
   },
+  "overrides": {
+    "esbuild": "0.28.1"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/express": "^5.0.5",
