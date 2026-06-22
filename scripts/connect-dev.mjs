@@ -14,14 +14,17 @@ let shuttingDown = false;
 
 function prefixOutput(stream, label) {
   let buffer = "";
+
   stream.on("data", (chunk) => {
     buffer += chunk.toString();
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() ?? "";
+
     for (const line of lines) {
       process.stdout.write(`[${label}] ${line}\n`);
     }
   });
+
   stream.on("end", () => {
     if (buffer.length > 0) {
       process.stdout.write(`[${label}] ${buffer}\n`);
@@ -47,16 +50,19 @@ async function ensureConfigExists() {
 }
 
 function ensureNgrokAvailable() {
-  const checker = spawn("ngrok", ["version"], { stdio: "ignore" });
+  const checker = spawn("ngrok", ["version"], { stdio: "ignore", shell: process.platform === "win32" });
+
   checker.once("error", () => {
     globalThis.console.error("ngrok not found. Install ngrok or run npm run mcp and use another tunnel.");
     process.exit(1);
   });
+
   checker.once("exit", (code) => {
     if (code !== 0) {
       globalThis.console.error("ngrok not found. Install ngrok or run npm run mcp and use another tunnel.");
       process.exit(1);
     }
+
     void startProcesses();
   });
 }
@@ -77,12 +83,17 @@ function printChatGptUrl(publicUrl) {
 
 async function readNgrokHttpsUrl() {
   const response = await globalThis.fetch(NGROK_API_URL);
+
   if (!response.ok) {
     return undefined;
   }
+
   const payload = await response.json();
   const tunnels = Array.isArray(payload?.tunnels) ? payload.tunnels : [];
-  const httpsTunnel = tunnels.find((tunnel) => typeof tunnel?.public_url === "string" && tunnel.public_url.startsWith("https://"));
+  const httpsTunnel = tunnels.find(
+    (tunnel) => typeof tunnel?.public_url === "string" && tunnel.public_url.startsWith("https://")
+  );
+
   return httpsTunnel?.public_url;
 }
 
@@ -90,6 +101,7 @@ async function announceNgrokUrl() {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
       const publicUrl = await readNgrokHttpsUrl();
+
       if (publicUrl) {
         printChatGptUrl(publicUrl);
         return;
@@ -97,6 +109,7 @@ async function announceNgrokUrl() {
     } catch {
       // Retry while ngrok initializes its local API.
     }
+
     await sleep(500);
   }
 
@@ -108,7 +121,8 @@ async function announceNgrokUrl() {
 async function startProcesses() {
   globalThis.console.log("Use the HTTPS ngrok URL with the printed /t/<token>/mcp path in ChatGPT Developer Mode.");
 
-  const mcp = spawn("npm", ["run", "dev"], {
+  const mcp = spawn("npm run dev", {
+    shell: true,
     env: {
       ...process.env,
       GPT_REPO_CONFIG: CONFIG_PATH,
@@ -122,6 +136,12 @@ async function startProcesses() {
 
   children.push(mcp);
 
+  mcp.once("error", (error) => {
+    globalThis.console.error(`[mcp] failed to start: ${error.message}`);
+    terminateChildren("SIGTERM");
+    process.exit(1);
+  });
+
   prefixOutput(mcp.stdout, "mcp");
   prefixOutput(mcp.stderr, "mcp");
 
@@ -129,6 +149,7 @@ async function startProcesses() {
     if (shuttingDown) {
       return;
     }
+
     shuttingDown = true;
     globalThis.console.error(`[${name}] exited (code=${code ?? "null"}, signal=${signal ?? "null"}). Stopping other process.`);
     terminateChildren("SIGTERM");
@@ -140,6 +161,7 @@ async function startProcesses() {
 
   try {
     const existingTunnel = await readNgrokHttpsUrl();
+
     if (existingTunnel) {
       globalThis.console.log("Reusing existing ngrok tunnel.");
       printChatGptUrl(existingTunnel);
@@ -150,11 +172,19 @@ async function startProcesses() {
   }
 
   const tunnel = spawn("ngrok", ["http", PORT, "--log=stdout"], {
+    shell: process.platform === "win32",
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"]
   });
 
   children.push(tunnel);
+
+  tunnel.once("error", (error) => {
+    globalThis.console.error(`[tunnel] failed to start: ${error.message}`);
+    terminateChildren("SIGTERM");
+    process.exit(1);
+  });
+
   prefixOutput(tunnel.stdout, "tunnel");
   prefixOutput(tunnel.stderr, "tunnel");
   tunnel.once("exit", onChildExit("tunnel"));
@@ -166,6 +196,7 @@ function handleShutdown(signal) {
   if (shuttingDown) {
     return;
   }
+
   shuttingDown = true;
   globalThis.console.log(`Received ${signal}. Shutting down MCP server and tunnel.`);
   terminateChildren("SIGTERM");

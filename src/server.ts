@@ -236,7 +236,16 @@ app.delete(mcpRoutePatterns, async (req: Request, res: Response) => {
   });
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   const localPath = publicPathToken ? "/t/[token]/mcp" : "/mcp";
   console.error(`gpt-repo-mcp listening on http://localhost:${port}${localPath}`);
+});
+
+server.on("error", (error) => {
+  console.error("gpt-repo-mcp server failed:", error);
+  process.exit(1);
+});
+
+server.on("close", () => {
+  console.error("gpt-repo-mcp server closed.");
 });
