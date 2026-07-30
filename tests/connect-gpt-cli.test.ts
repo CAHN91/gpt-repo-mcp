@@ -200,6 +200,7 @@ describe("connect-gpt config CLI", () => {
     };
     expect(written.repos[0]?.writes?.enabled).toBe(false);
     expect(written.repos[0]?.operations?.enabled).toBe(false);
+    expect(written.repos[0]?.operations).not.toHaveProperty("validation_enabled");
   });
 
   test("add --mode write enables practical solo-dev write policy without operations", async () => {
@@ -229,6 +230,7 @@ describe("connect-gpt config CLI", () => {
     expect(repo?.writes?.denied_globs).toContain("**/.next/**");
     expect(repo?.writes?.denied_globs).toContain("**/coverage/**");
     expect(repo?.operations?.enabled).toBe(false);
+    expect(repo?.operations).not.toHaveProperty("validation_enabled");
   });
 
   test("add --ship enables write policy and local git operations", async () => {
@@ -249,6 +251,8 @@ describe("connect-gpt config CLI", () => {
           git_stage_enabled?: boolean;
           git_commit_enabled?: boolean;
           cleanup_enabled?: boolean;
+          validation_enabled?: boolean;
+          validation_test_path_globs?: string[];
         };
       }>;
     };
@@ -258,8 +262,45 @@ describe("connect-gpt config CLI", () => {
       enabled: true,
       git_stage_enabled: true,
       git_commit_enabled: true,
-      cleanup_enabled: true
+      cleanup_enabled: true,
+      validation_enabled: true,
+      validation_test_path_globs: ["tests/**", "**/*.test.ts", "**/*.spec.ts"]
     });
+  });
+
+  test("ship mode remains a single high-authority profile without extra sync flags", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
+    const configPath = join(sandbox, "config.local.json");
+    const repoRoot = join(sandbox, "repo");
+    await mkdir(join(repoRoot, ".git"), { recursive: true });
+
+    const added = await runCli(["add", repoRoot, "--mode", "ship", "--id", "repo", "--config", configPath], sandbox);
+    expect(added.code).toBe(0);
+
+    const written = JSON.parse(await readFile(configPath, "utf8")) as {
+      repos: Array<{
+        operations?: {
+          enabled?: boolean;
+          git_stage_enabled?: boolean;
+          git_commit_enabled?: boolean;
+          cleanup_enabled?: boolean;
+          validation_enabled?: boolean;
+          validation_test_path_globs?: string[];
+        };
+      }>;
+    };
+    const repo = written.repos[0];
+    expect(repo?.operations).toMatchObject({
+      enabled: true,
+      git_stage_enabled: true,
+      git_commit_enabled: true,
+      cleanup_enabled: true,
+      validation_enabled: true,
+      validation_test_path_globs: ["tests/**", "**/*.test.ts", "**/*.spec.ts"]
+    });
+    expect(repo?.operations).not.toHaveProperty("git_push_enabled");
+    expect(repo?.operations).not.toHaveProperty("git_pull_enabled");
+    expect(repo?.operations).not.toHaveProperty("remote_sync_enabled");
   });
 
   test("rejects duplicate repo_id during add", async () => {
@@ -343,6 +384,67 @@ describe("connect-gpt config CLI", () => {
     expect(passing.stdout).toContain("PASS 1 repo(s) validated.");
   });
 
+  test("check warns when ship-like local operations omit validation", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
+    const configPath = join(sandbox, "config.local.json");
+    const repoRoot = join(sandbox, "repo");
+    await mkdir(join(repoRoot, ".git"), { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      repos: [
+        {
+          repo_id: "ship-like",
+          display_name: "Ship Like",
+          root: repoRoot,
+          operations: {
+            enabled: true,
+            git_stage_enabled: true,
+            git_commit_enabled: true,
+            cleanup_enabled: true
+          }
+        }
+      ],
+      limits: {}
+    }, null, 2));
+
+    const result = await runCli(["check", "--config", configPath], sandbox);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("PASS 1 repo(s) validated.");
+    expect(result.stdout).toContain("WARN [VALIDATION_NOT_ENABLED]");
+    expect(result.stdout).toContain("operations.validation_enabled");
+  });
+
+  test("check warns when ship-like focused validation paths are not configured", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
+    const configPath = join(sandbox, "config.local.json");
+    const repoRoot = join(sandbox, "repo");
+    await mkdir(join(repoRoot, ".git"), { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      repos: [
+        {
+          repo_id: "ship-like",
+          display_name: "Ship Like",
+          root: repoRoot,
+          operations: {
+            enabled: true,
+            git_stage_enabled: true,
+            git_commit_enabled: true,
+            cleanup_enabled: true,
+            validation_enabled: true
+          }
+        }
+      ],
+      limits: {}
+    }, null, 2));
+
+    const result = await runCli(["check", "--config", configPath], sandbox);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("PASS 1 repo(s) validated.");
+    expect(result.stdout).toContain("WARN [SHIP_VALIDATION_TEST_PATHS_NOT_CONFIGURED]");
+    expect(result.stdout).toContain("operations.validation_test_path_globs");
+  });
+
   test("writes pretty JSON config after add", async () => {
     const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
     const configPath = join(sandbox, "config.local.json");
@@ -375,7 +477,7 @@ describe("connect-gpt config CLI", () => {
     expect(removed.stdout).toContain("Removed repo_id=My_Repo");
   });
 
-  test("preserves unknown config fields on add", async () => {
+  test("rejects unknown config fields on add without rewriting the file", async () => {
     const sandbox = await mkdtemp(join(tmpdir(), "connect-gpt-cli-"));
     const configPath = join(sandbox, "config.local.json");
     const repoRoot = join(sandbox, "repo");
@@ -387,15 +489,12 @@ describe("connect-gpt config CLI", () => {
       metadata: { owner: "team-a" }
     }, null, 2));
 
+    const original = await readFile(configPath, "utf8");
     const added = await runCli(["config", "add", repoRoot, "--id", "repo", "--config", configPath], sandbox);
-    expect(added.code).toBe(0);
 
-    const written = JSON.parse(await readFile(configPath, "utf8")) as {
-      metadata?: { owner?: string };
-      repos: Array<{ repo_id: string }>;
-    };
-    expect(written.metadata?.owner).toBe("team-a");
-    expect(written.repos).toHaveLength(1);
+    expect(added.code).toBe(1);
+    expect(added.stderr).toContain("Unrecognized key");
+    await expect(readFile(configPath, "utf8")).resolves.toBe(original);
   });
 });
 

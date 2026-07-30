@@ -16,10 +16,6 @@ Use this checklist when a mutating tool dry-run succeeds but the actual tool cal
   - `repo_write_stage_commit`
   - `repo_write_recover`
   - `repo_cleanup_paths`
-  - compatibility aliases:
-  - `repo_git_stage`
-  - `repo_git_unstage`
-  - `repo_git_commit`
 - Verify connector metadata was refreshed after changing tool schemas, descriptions, or server instructions.
 - Verify `src/instructions.ts` describes the app as read-mostly and does not call it read-only.
 - Verify `config.local.json` enables the relevant write or operations policy for the target repo.
@@ -49,7 +45,7 @@ JSON audit logs remain the default. Pretty logs are compact one-line renderings 
 
 ## If A Commit Tool Is Blocked Before Approval
 
-Prefer `repo_write_stage`, `repo_write_unstage`, and `repo_write_commit` in ChatGPT workflows. The `repo_git_*` tools remain compatibility aliases with the same contracts and safety checks.
+Use the canonical `repo_write_stage`, `repo_write_unstage`, and `repo_write_commit` tools for granular Git operations. There are no duplicate git-prefixed mutation aliases.
 
 1. Confirm `repo_write_commit` with `dry_run: true` passed.
 2. Confirm the intended paths are staged with `repo_git_status`.
@@ -62,6 +58,6 @@ git commit -m "<message>"
 
 This indicates client-side pre-approval blocking, not necessarily a server policy failure. The server still requires repo-local operations opt-in, exact `expected_head_sha`, and exact `expected_staged_paths`, and it creates a local commit only. It does not push, pull, reset, checkout, switch, rebase, merge, stash, clean, force, delete branches, or run shell commands.
 
-## Write-Prefixed Alias Result
+## Canonical Git Tool Names
 
-This repo includes write-prefixed preferred names for safe local git operations: `repo_write_stage`, `repo_write_unstage`, and `repo_write_commit`. Prefer these names for ChatGPT workflows; use `repo_git_stage`, `repo_git_unstage`, and `repo_git_commit` as compatibility aliases when needed.
+Safe local Git mutations have one public name each: `repo_write_stage`, `repo_write_unstage`, `repo_write_commit`, and `repo_write_stage_commit`. This avoids duplicate approval surfaces and ambiguous tool selection.

@@ -11,6 +11,14 @@ const DEFAULT_LABELS: TaskKind[] = ["todo", "fixme", "hack", "checkbox", "roadma
 
 export type TaskInventoryOptions = Omit<TaskInventoryInput, "repo_id">;
 
+export type TaskInventoryLimits = {
+  maxSearchResults: number;
+  maxTreeEntries: number;
+  maxFiles: number;
+  maxTreePages: number;
+  maxFileBytes: number;
+};
+
 type TaskInventoryItem = {
   path: string;
   line: number;
@@ -22,26 +30,39 @@ type TaskInventoryItem = {
 export class TaskInventoryService {
   private readonly ignoreEngine = new IgnoreEngine();
   private readonly classifier = new FileClassifier(this.ignoreEngine);
+  private readonly limits: TaskInventoryLimits;
 
-  constructor(private readonly root: string, private readonly sandbox: PathSandbox) {}
+  constructor(
+    private readonly sandbox: PathSandbox,
+    limits: Partial<TaskInventoryLimits> = {}
+  ) {
+    this.limits = {
+      maxSearchResults: limits.maxSearchResults ?? DEFAULT_LIMITS.max_search_results,
+      maxTreeEntries: limits.maxTreeEntries ?? DEFAULT_LIMITS.max_tree_entries,
+      maxFiles: limits.maxFiles ?? DEFAULT_LIMITS.max_task_inventory_files,
+      maxTreePages: limits.maxTreePages ?? DEFAULT_LIMITS.max_task_inventory_tree_pages,
+      maxFileBytes: limits.maxFileBytes ?? DEFAULT_LIMITS.max_task_inventory_file_bytes
+    };
+  }
 
   async inventory(options: TaskInventoryOptions = {}) {
-    const maxResults = Math.min(options.max_results ?? DEFAULT_LIMITS.max_search_results, DEFAULT_LIMITS.max_search_results);
+    const maxResults = Math.min(options.max_results ?? this.limits.maxSearchResults, this.limits.maxSearchResults);
     const labels = new Set(options.labels ?? DEFAULT_LABELS);
     const start = parseCursor(options.cursor);
     const warnings: string[] = [];
-    const treeService = new RepoTreeService(this.root, this.sandbox);
+    const treeService = new RepoTreeService(this.sandbox);
     const tasks: TaskInventoryItem[] = [];
     let scannedFileCount = 0;
     let scanComplete = true;
     let treeCursor: string | undefined;
     let treePages = 0;
 
-    while (treePages < DEFAULT_LIMITS.max_task_inventory_tree_pages && scannedFileCount < DEFAULT_LIMITS.max_task_inventory_files) {
+    while (treePages < this.limits.maxTreePages && scannedFileCount < this.limits.maxFiles) {
       const tree = await treeService.tree({
         include_files: true,
-        page_size: DEFAULT_LIMITS.max_tree_entries,
+        page_size: this.limits.maxTreeEntries,
         respect_default_excludes: true,
+        exclude_prefixes: [".chatgpt"],
         cursor: treeCursor
       });
       treePages += 1;
@@ -56,7 +77,10 @@ export class TaskInventoryService {
         if (this.ignoreEngine.isSensitiveCandidate(entry.path)) {
           continue;
         }
-        if (scannedFileCount >= DEFAULT_LIMITS.max_task_inventory_files) {
+        if (entry.path.startsWith(".chatgpt/") || this.ignoreEngine.isInternalArtifact(entry.path)) {
+          continue;
+        }
+        if (scannedFileCount >= this.limits.maxFiles) {
           scanComplete = false;
           addWarning(warnings, "SCAN_FILE_LIMIT_REACHED");
           break;
@@ -67,7 +91,7 @@ export class TaskInventoryService {
           continue;
         }
         scannedFileCount += 1;
-        const readResult = await readFilePrefix(resolved.absolutePath, DEFAULT_LIMITS.max_task_inventory_file_bytes);
+        const readResult = await readFilePrefix(resolved.absolutePath, this.limits.maxFileBytes);
         if (readResult.truncated) {
           addWarning(warnings, `FILE_TRUNCATED:${entry.path}`);
         }
@@ -102,9 +126,9 @@ export class TaskInventoryService {
 
     if (treeCursor) {
       scanComplete = false;
-      if (scannedFileCount >= DEFAULT_LIMITS.max_task_inventory_files) {
+      if (scannedFileCount >= this.limits.maxFiles) {
         addWarning(warnings, "SCAN_FILE_LIMIT_REACHED");
-      } else if (treePages >= DEFAULT_LIMITS.max_task_inventory_tree_pages) {
+      } else if (treePages >= this.limits.maxTreePages) {
         addWarning(warnings, "SCAN_TREE_PAGE_LIMIT_REACHED");
       } else {
         addWarning(warnings, "TREE_SCAN_INCOMPLETE");

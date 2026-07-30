@@ -1,8 +1,12 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import ignore from "ignore";
 import type { GitReviewInput, GitReviewResult } from "../contracts/git-review.contract.js";
 import { IgnoreEngine } from "./ignore-engine.js";
 import { GitService } from "./git-service.js";
 import { OperationsPolicy } from "./operations-policy.js";
+import { validateRepoPath } from "./path-sandbox.js";
+import { DelegationGateService } from "./delegation-gate-service.js";
 
 type StatusFile = GitReviewResult["changed_paths"][number];
 
@@ -10,7 +14,7 @@ const STAGED_RECOVERY_WARNING = "STAGED_RECOVERY_REQUIRES_UNSTAGE_FIRST";
 const STAGED_RECOVERY_GUIDANCE = [
   "Staged paths cannot be restored directly with repo_git_restore_paths because restore is worktree-only.",
   "For bad staged changes, use repo_write_recover with the review-provided unstage_paths and restore_paths, or use repo_write_unstage first when granular control is needed.",
-  "If the staged diff is good, use repo_write_commit_dry_run before committing the exact staged paths."
+  "If the staged diff is good, call repo_write_commit with the review-provided repo_write_commit_dry_run payload; it sets dry_run=true."
 ];
 
 export class GitReviewService {
@@ -18,32 +22,56 @@ export class GitReviewService {
 
   constructor(
     private readonly root: string,
-    private readonly operationsPolicy: OperationsPolicy = new OperationsPolicy()
+    private readonly operationsPolicy: OperationsPolicy = new OperationsPolicy(),
+    private readonly delegationGate: DelegationGateService = new DelegationGateService(root)
   ) {}
 
   async review(input: GitReviewInput): Promise<GitReviewResult> {
     const git = new GitService(this.root);
-    const [status, unstagedDiff, stagedDiff] = await Promise.all([
-      git.status(),
-      git.diff({}),
-      git.diff({ staged: true })
-    ]);
-    const diff = mergeDiffs(stagedDiff, unstagedDiff);
-    const changedPaths = status.files.map((file) => ({
+    const detail = input.detail ?? "compact";
+    const scopePaths = input.paths ? [...new Set(input.paths.map((path) => validateRepoPath(path)))].sort() : undefined;
+    const scopeSet = scopePaths ? new Set(scopePaths) : undefined;
+    const status = await git.status();
+    const changedPathsAll = status.files.map((file) => ({
       ...file,
       status: classifyStatus(file.index, file.worktree),
       staged: file.index !== " " && file.index !== "?",
       unstaged: file.worktree !== " " || file.index === "?"
     }));
-
-    const maxFiles = input.max_files ?? diff.files.length;
-    const diffSummaryTruncated = diff.truncated || diff.files.length > maxFiles;
+    const changedPaths = scopeSet ? changedPathsAll.filter((path) => scopeSet.has(path.path)) : changedPathsAll;
+    const diffCandidatePaths = [...new Set(changedPaths
+      .filter((path) => path.status !== "untracked")
+      .map((path) => path.path))].sort();
+    const maxFiles = input.max_files ?? diffCandidatePaths.length;
+    const selectedDiffPaths = diffCandidatePaths.slice(0, maxFiles);
+    const [unstagedDiff, stagedDiff, worktreeFingerprint, reviewStateFingerprint] = await Promise.all([
+      git.diff({ paths: selectedDiffPaths }),
+      git.diff({ staged: true, paths: selectedDiffPaths }),
+      git.worktreeFingerprint(),
+      git.reviewStateFingerprint()
+    ]);
+    const diff = mergeDiffs(stagedDiff, unstagedDiff);
+    const diffSummaryTruncated = diff.truncated || selectedDiffPaths.length < diffCandidatePaths.length;
     const warnings = [...diff.warnings];
+    if (scopeSet) {
+      warnings.push("REVIEW_SCOPE_APPLIED");
+      const omittedChangedPaths = changedPathsAll.filter((path) => !scopeSet.has(path.path));
+      if (omittedChangedPaths.length > 0) {
+        warnings.push("REVIEW_SCOPE_OMITTED_CHANGED_PATHS");
+      }
+      const missingScopePaths = (scopePaths ?? []).filter((path) => !changedPathsAll.some((changed) => changed.path === path));
+      if (missingScopePaths.length > 0) {
+        warnings.push("REVIEW_SCOPE_PATHS_NOT_CHANGED");
+      }
+    }
     if (diffSummaryTruncated) {
       warnings.push("DIFF_SUMMARY_TRUNCATED");
     }
     if (status.clean) {
       warnings.push("NO_CHANGES");
+    }
+    if (changedPaths.some((path) => path.status === "untracked")) {
+      warnings.push("UNTRACKED_PATHS_REVIEWED_FOR_STAGING");
     }
 
     const excludedPaths: Array<{ path: string; reason: string }> = [];
@@ -58,8 +86,23 @@ export class GitReviewService {
         recommendedStagePaths.push(path.path);
       }
     }
-    if (excludedPaths.some((path) => path.reason === "UNTRACKED_REQUIRES_EXPLICIT_REVIEW")) {
+    if (changedPaths.some((path) =>
+      path.status === "untracked" && excludedPaths.some((excluded) => excluded.path === path.path)
+    )) {
       warnings.push("UNTRACKED_PATHS_EXCLUDED");
+    }
+    const shipReadiness = await this.readShipReadiness(status.head_sha, worktreeFingerprint);
+    if (shipReadiness.validation.status === "stale") {
+      warnings.push("VALIDATION_STALE");
+    }
+    if (shipReadiness.validation.status === "failed") {
+      warnings.push("VALIDATION_FAILED");
+    }
+    if (shipReadiness.validation.status === "missing" && !status.clean) {
+      warnings.push("VALIDATION_MISSING");
+    }
+    if (shipReadiness.validation.focused) {
+      warnings.push("VALIDATION_FOCUSED");
     }
 
     const stagedPaths = changedPaths
@@ -82,8 +125,25 @@ export class GitReviewService {
       .filter((path) => path.status === "untracked" && this.isCleanupEligible(path.path))
       .map((path) => path.path)
       .sort();
+    const discardPaths = changedPaths
+      .filter((path) => path.status === "untracked" && !this.exclusionReason(path) && !this.isCleanupEligible(path.path))
+      .map((path) => path.path)
+      .sort();
     const stagePaths = [...new Set(recommendedStagePaths)].sort();
     const expectedCommitPaths = [...new Set([...stagedPaths, ...stagePaths])].sort();
+    const delegationGate = await this.delegationGate.evaluate({
+      repo_id: input.repo_id,
+      paths: expectedCommitPaths,
+      operation: "review",
+      head_sha: status.head_sha,
+      review_state_fingerprint: reviewStateFingerprint
+    });
+    const happyPathAllowed = delegationGate.status !== "blocked";
+    if (delegationGate.status === "blocked") {
+      warnings.push("DELEGATION_REVIEW_GATE_BLOCKED", ...delegationGate.blocking_reasons);
+    } else if (delegationGate.status === "advisory") {
+      warnings.push("DELEGATION_REVIEW_GATE_ADVISORY", ...delegationGate.warnings);
+    }
     const recoverRestorePaths = [...new Set([...recoverableWorktreePaths, ...stagedRecoveryPaths])].sort();
     const suggestedCommitMessage = suggestCommitMessage(expectedCommitPaths);
     const nextToolPayloads: GitReviewResult["next_tool_payloads"] = {};
@@ -131,13 +191,14 @@ export class GitReviewService {
       };
     }
 
-    if (stagedRecoveryPaths.length > 0 || recoverRestorePaths.length > 0 || cleanupPaths.length > 0) {
+    if (stagedRecoveryPaths.length > 0 || recoverRestorePaths.length > 0 || cleanupPaths.length > 0 || discardPaths.length > 0) {
       nextToolPayloads.repo_write_recover_dry_run = {
         repo_id: input.repo_id,
         expected_head_sha: status.head_sha,
         ...(stagedRecoveryPaths.length > 0 ? { unstage_paths: stagedRecoveryPaths } : {}),
         ...(recoverRestorePaths.length > 0 ? { restore_paths: recoverRestorePaths } : {}),
         ...(cleanupPaths.length > 0 ? { cleanup_paths: cleanupPaths } : {}),
+        ...(discardPaths.length > 0 ? { discard_paths: discardPaths } : {}),
         dry_run: true
       };
       nextToolPayloads.repo_write_recover_actual = {
@@ -146,11 +207,12 @@ export class GitReviewService {
         ...(stagedRecoveryPaths.length > 0 ? { unstage_paths: stagedRecoveryPaths } : {}),
         ...(recoverRestorePaths.length > 0 ? { restore_paths: recoverRestorePaths } : {}),
         ...(cleanupPaths.length > 0 ? { cleanup_paths: cleanupPaths } : {}),
+        ...(discardPaths.length > 0 ? { discard_paths: discardPaths } : {}),
         dry_run: false
       };
     }
 
-    if (stagePaths.length > 0) {
+    if (stagePaths.length > 0 && happyPathAllowed) {
       nextToolPayloads.repo_write_stage_dry_run = {
         repo_id: input.repo_id,
         paths: stagePaths,
@@ -181,7 +243,7 @@ export class GitReviewService {
       }
     }
 
-    if (expectedCommitPaths.length > 0) {
+    if (expectedCommitPaths.length > 0 && happyPathAllowed) {
       nextToolPayloads.repo_write_commit_dry_run = {
         repo_id: input.repo_id,
         message: suggestedCommitMessage,
@@ -191,16 +253,37 @@ export class GitReviewService {
       };
     }
 
+    const canonicalNextToolPayloads: GitReviewResult["next_tool_payloads"] = {};
+    if (nextToolPayloads.repo_write_stage_commit_actual) {
+      canonicalNextToolPayloads.repo_write_stage_commit = nextToolPayloads.repo_write_stage_commit_actual;
+    }
+    if (nextToolPayloads.repo_write_recover_actual) {
+      canonicalNextToolPayloads.repo_write_recover = nextToolPayloads.repo_write_recover_actual;
+    }
+    if (stagePaths.length === 0 && stagedPaths.length > 0 && !hasStagedExcludedPaths && happyPathAllowed) {
+      canonicalNextToolPayloads.repo_write_commit = {
+        repo_id: input.repo_id,
+        message: suggestedCommitMessage,
+        expected_head_sha: status.head_sha,
+        expected_staged_paths: expectedCommitPaths,
+        dry_run: false
+      };
+    }
+    const selectedNextToolPayloads = detail === "full"
+      ? { ...nextToolPayloads, ...canonicalNextToolPayloads }
+      : canonicalNextToolPayloads;
+
     return {
       ok: true,
+      detail,
       branch: status.branch,
       head_sha: status.head_sha,
       clean: status.clean,
       changed_paths: changedPaths,
       diff_summary: {
-        file_count: diff.files.length,
+        file_count: diffCandidatePaths.length,
         truncated: diffSummaryTruncated,
-        files: diff.files.slice(0, maxFiles).map((file) => ({
+        files: diff.files.map((file) => ({
           path: file.path,
           status: file.status,
           hunk_count: file.hunks.length,
@@ -208,7 +291,7 @@ export class GitReviewService {
         }))
       },
       recommendation: {
-        ready_to_stage: stagePaths.length > 0,
+        ready_to_stage: stagePaths.length > 0 && happyPathAllowed,
         recommended_stage_paths: stagePaths,
         excluded_paths: excludedPaths,
         suggested_commit_message: suggestedCommitMessage,
@@ -216,7 +299,9 @@ export class GitReviewService {
         warnings,
         ...(stagedRecoveryPaths.length > 0 ? { recovery_guidance: STAGED_RECOVERY_GUIDANCE } : {})
       },
-      next_tool_payloads: status.clean ? {} : nextToolPayloads
+      delegation_gate: delegationGate,
+      ship_readiness: shipReadiness,
+      next_tool_payloads: status.clean ? {} : selectedNextToolPayloads
     };
   }
 
@@ -227,11 +312,8 @@ export class GitReviewService {
     if (this.ignoreEngine.isSensitiveCandidate(path.path)) {
       return "SECRET_CANDIDATE_REQUIRES_MANUAL_REVIEW";
     }
-    if (isGeneratedPath(path.path)) {
+    if (this.ignoreEngine.isIgnored(path.path) || isGeneratedPath(path.path)) {
       return "GENERATED_PATH_EXCLUDED";
-    }
-    if (path.status === "untracked") {
-      return "UNTRACKED_REQUIRES_EXPLICIT_REVIEW";
     }
     if (path.status === "deleted") {
       return "DELETED_PATH_REQUIRES_EXPLICIT_REVIEW";
@@ -258,6 +340,52 @@ export class GitReviewService {
       return false;
     }
     return !this.ignoreEngine.isSensitiveCandidate(path.path);
+  }
+
+  private async readShipReadiness(headSha: string, worktreeFingerprint: string): Promise<NonNullable<GitReviewResult["ship_readiness"]>> {
+    try {
+      const raw = await readFile(join(this.root, ".chatgpt", "validation", "latest.json"), "utf8");
+      const parsed = JSON.parse(raw) as {
+        validation_id?: unknown;
+        profile?: unknown;
+        focused?: unknown;
+        test_paths?: unknown;
+        status?: unknown;
+        head_sha?: unknown;
+        worktree_fingerprint?: unknown;
+        artifact_path?: unknown;
+      };
+      const validationStatus = parsed.status === "passed" || parsed.status === "failed" || parsed.status === "skipped"
+        ? parsed.status
+        : undefined;
+      const validationHead = typeof parsed.head_sha === "string" ? parsed.head_sha : undefined;
+      const validationFingerprint = typeof parsed.worktree_fingerprint === "string" ? parsed.worktree_fingerprint : undefined;
+      const fingerprintStale = validationFingerprint ? validationFingerprint !== worktreeFingerprint : worktreeFingerprint !== "clean";
+      const status = validationHead && validationHead !== headSha
+        ? "stale"
+        : fingerprintStale
+          ? "stale"
+        : validationStatus === "passed"
+          ? "passed"
+          : validationStatus === "failed"
+            ? "failed"
+            : "missing";
+      return {
+        validation: {
+          status,
+          ...(typeof parsed.validation_id === "string" ? { validation_id: parsed.validation_id } : {}),
+          ...(validationStatus ? { validation_status: validationStatus } : {}),
+          ...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
+          ...(parsed.focused === true ? { focused: true } : {}),
+          ...(Array.isArray(parsed.test_paths) && parsed.test_paths.every((path) => typeof path === "string") ? { test_paths: parsed.test_paths as string[] } : {}),
+          ...(validationHead ? { head_sha: validationHead } : {}),
+          ...(validationFingerprint ? { worktree_fingerprint: validationFingerprint } : {}),
+          ...(typeof parsed.artifact_path === "string" ? { artifact_path: parsed.artifact_path } : {})
+        }
+      };
+    } catch {
+      return { validation: { status: "missing" } };
+    }
   }
 }
 
@@ -306,16 +434,28 @@ function mergeDiffs(stagedDiff: GitDiff, unstagedDiff: GitDiff): GitDiff {
     });
   }
 
+  const truncationReasons = [stagedDiff.truncation_reason, unstagedDiff.truncation_reason]
+    .filter((value): value is NonNullable<GitDiff["truncation_reason"]> => Boolean(value));
+  const hasMaxFiles = truncationReasons.some((value) => value.includes("max_files"));
+  const hasMaxBytes = truncationReasons.some((value) => value.includes("max_bytes"));
   return {
     base: stagedDiff.base ?? unstagedDiff.base,
     compare: stagedDiff.compare ?? unstagedDiff.compare,
     staged: stagedDiff.staged,
     unstaged: unstagedDiff.unstaged,
     files: [...filesByPath.values()],
+    total_file_count: new Set([
+      ...stagedDiff.files.map((file) => file.path),
+      ...unstagedDiff.files.map((file) => file.path)
+    ]).size,
     truncated: stagedDiff.truncated || unstagedDiff.truncated,
+    truncation_reason: hasMaxFiles && hasMaxBytes
+      ? "max_files+max_bytes"
+      : hasMaxFiles ? "max_files" : hasMaxBytes ? "max_bytes" : undefined,
     warnings: [...stagedDiff.warnings, ...unstagedDiff.warnings]
   };
 }
+
 
 function summarizeDiffFile(path: string, status: string | undefined, hunkCount: number): string {
   return `${status ?? "modified"} ${path} (${hunkCount} hunks)`;

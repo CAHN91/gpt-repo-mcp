@@ -3,39 +3,13 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { createConnectorRuntime } from "./connector-runtime.mjs";
 
 const CONFIG_PATH = "./config.local.json";
 const PORT = "8787";
 const NGROK_API_URL = "http://127.0.0.1:4040/api/tunnels";
 const publicPathToken = randomBytes(16).toString("hex");
-
-const children = [];
-let shuttingDown = false;
-
-function prefixOutput(stream, label) {
-  let buffer = "";
-  stream.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      process.stdout.write(`[${label}] ${line}\n`);
-    }
-  });
-  stream.on("end", () => {
-    if (buffer.length > 0) {
-      process.stdout.write(`[${label}] ${buffer}\n`);
-    }
-  });
-}
-
-function terminateChildren(signal = "SIGTERM") {
-  for (const child of children) {
-    if (!child.killed) {
-      child.kill(signal);
-    }
-  }
-}
+const runtime = createConnectorRuntime();
 
 async function ensureConfigExists() {
   try {
@@ -120,23 +94,7 @@ async function startProcesses() {
     stdio: ["ignore", "pipe", "pipe"]
   });
 
-  children.push(mcp);
-
-  prefixOutput(mcp.stdout, "mcp");
-  prefixOutput(mcp.stderr, "mcp");
-
-  const onChildExit = (name) => (code, signal) => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    globalThis.console.error(`[${name}] exited (code=${code ?? "null"}, signal=${signal ?? "null"}). Stopping other process.`);
-    terminateChildren("SIGTERM");
-    globalThis.setTimeout(() => terminateChildren("SIGKILL"), 1500);
-    process.exit(code ?? 1);
-  };
-
-  mcp.once("exit", onChildExit("mcp"));
+  runtime.track(mcp, "mcp");
 
   try {
     const existingTunnel = await readNgrokHttpsUrl();
@@ -154,23 +112,13 @@ async function startProcesses() {
     stdio: ["ignore", "pipe", "pipe"]
   });
 
-  children.push(tunnel);
-  prefixOutput(tunnel.stdout, "tunnel");
-  prefixOutput(tunnel.stderr, "tunnel");
-  tunnel.once("exit", onChildExit("tunnel"));
+  runtime.track(tunnel, "tunnel");
 
   void announceNgrokUrl();
 }
 
 function handleShutdown(signal) {
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-  globalThis.console.log(`Received ${signal}. Shutting down MCP server and tunnel.`);
-  terminateChildren("SIGTERM");
-  globalThis.setTimeout(() => terminateChildren("SIGKILL"), 1500);
-  globalThis.setTimeout(() => process.exit(0), 1700);
+  runtime.shutdown(signal, "Shutting down MCP server and tunnel.");
 }
 
 process.on("SIGINT", () => handleShutdown("SIGINT"));

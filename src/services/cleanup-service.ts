@@ -4,6 +4,7 @@ import { lstat, readdir, realpath, rm } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { RepoReaderError } from "../runtime/errors.js";
+import { isNotFoundError } from "../runtime/fs-helpers.js";
 import { IgnoreEngine } from "./ignore-engine.js";
 import { validateRepoPath } from "./path-sandbox.js";
 import { OperationsPolicy } from "./operations-policy.js";
@@ -145,13 +146,4 @@ async function assertWithinRoot(root: string, target: string): Promise<void> {
   if (rel !== "" && (rel.startsWith("..") || rel.includes(`..${sep}`))) {
     throw new RepoReaderError("SYMLINK_ESCAPE_REJECTED", "Path escapes approved repository.");
   }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
 }

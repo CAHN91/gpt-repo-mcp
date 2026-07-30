@@ -6,6 +6,47 @@ import { PathSandbox } from "../src/services/path-sandbox.js";
 import { WritePolicy, type WritePolicyConfig } from "../src/services/write-policy.js";
 import { createRepoFixture } from "./fixtures/repo-fixture.js";
 
+class FailAfterMarkerSandbox extends PathSandbox {
+  constructor(
+    root: string,
+    private readonly markerPath: string,
+    private readonly failedPath: string
+  ) {
+    super(root);
+  }
+
+  override async resolve(repoPath: string) {
+    if (repoPath === this.failedPath) {
+      try {
+        await access(this.markerPath);
+        throw new Error("Injected filesystem failure");
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error;
+      }
+    }
+    return super.resolve(repoPath);
+  }
+}
+
+class MutateOnSecondResolveSandbox extends PathSandbox {
+  private resolves = 0;
+
+  constructor(root: string, private readonly targetPath: string) {
+    super(root);
+  }
+
+  override async resolve(repoPath: string) {
+    const resolved = await super.resolve(repoPath);
+    if (repoPath === "docs/guide.md") {
+      this.resolves += 1;
+      if (this.resolves === 2) {
+        await writeFile(this.targetPath, "external change\n");
+      }
+    }
+    return resolved;
+  }
+}
+
 describe("WriteChangesService", () => {
   test("multi-file write creates two new files", async () => {
     const fixture = await createRepoFixture();
@@ -32,8 +73,8 @@ describe("WriteChangesService", () => {
       warnings: [],
       next_steps: [
         "Run repo_git_review to inspect the resulting diff.",
-        "If the edit pack is wrong, use git recovery/restore workflow before committing.",
-        "If the diff is good, use repo_write_stage and repo_write_commit."
+        "If the edit pack is wrong, use the repo_write_recover payload returned by repo_git_review.",
+        "If the diff is good, use the repo_write_stage_commit payload returned by repo_git_review."
       ]
     });
     expect(result.files.map((file) => ({
@@ -66,6 +107,27 @@ describe("WriteChangesService", () => {
     await expect(readFile(join(fixture.root, "docs", "new.md"), "utf8")).resolves.toBe("New\n");
     await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\nAppended\n");
     await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("safeFetch");
+  });
+
+  test("rejects stale per-change expected_old_sha256 before applying any changes", async () => {
+    const fixture = await createRepoFixture();
+    const service = createService(fixture.root, { enabled: true, allowed_globs: ["docs/**", "src/**"] });
+
+    await expect(service.apply({
+      changes: [
+        { type: "write", path: "docs/new.md", content: "New\n" },
+        { type: "replace", path: "src/app.ts", find: "rawFetch", replace: "safeFetch", expected_old_sha256: "0".repeat(64) }
+      ]
+    })).rejects.toMatchObject({
+      code: "WRITE_STALE_EXPECTED_SHA",
+      diagnostics: {
+        failed_path: "src/app.ts",
+        expected_old_sha256: "0".repeat(64)
+      }
+    });
+
+    await expect(access(join(fixture.root, "docs", "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("rawFetch");
   });
 
   test("grouped edit applies two replacements to one file result", async () => {
@@ -150,6 +212,20 @@ describe("WriteChangesService", () => {
     expect(result.counts).toEqual({ requested: 2, changed: 2, created: 1, unchanged: 0 });
     await expect(access(join(fixture.root, "docs", "dry.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\n");
+  });
+
+  test("dry_run does not create missing parent directories", async () => {
+    const fixture = await createRepoFixture();
+    const service = createService(fixture.root, { enabled: true, allowed_globs: ["generated/**"] });
+
+    await service.apply({
+      dry_run: true,
+      changes: [
+        { type: "write", path: "generated/nested/preview.md", content: "Preview\n" }
+      ]
+    });
+
+    await expect(access(join(fixture.root, "generated"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("no-op write increments unchanged count", async () => {
@@ -327,7 +403,7 @@ describe("WriteChangesService", () => {
     })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
-  test("partial apply failure reports applied paths failed path and recovery hint", async () => {
+  test("prevalidates the entire pack before changing any file", async () => {
     const fixture = await createRepoFixture();
     const service = createService(fixture.root, { enabled: true, allowed_globs: ["docs/**", "src/**"] });
 
@@ -339,17 +415,13 @@ describe("WriteChangesService", () => {
       ]
     })).rejects.toMatchObject({
       code: "WRITE_FIND_NOT_FOUND",
-      diagnostics: {
-        applied_paths: ["docs/applied-a.md", "docs/guide.md"],
-        failed_path: "src/app.ts",
-        recovery_hint: expect.stringContaining("repo_git_review")
-      }
+      diagnostics: {}
     });
-    await expect(readFile(join(fixture.root, "docs", "applied-a.md"), "utf8")).resolves.toBe("A\n");
-    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toContain("Applied\n");
+    await expect(access(join(fixture.root, "docs", "applied-a.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\n");
   });
 
-  test("grouped edit partial failure reports previously applied top-level paths", async () => {
+  test("prevalidates grouped edits before changing earlier paths", async () => {
     const fixture = await createRepoFixture();
     const service = createService(fixture.root, { enabled: true, allowed_globs: ["docs/**", "src/**"] });
 
@@ -367,14 +439,58 @@ describe("WriteChangesService", () => {
       ]
     })).rejects.toMatchObject({
       code: "WRITE_FIND_NOT_FOUND",
+      diagnostics: {}
+    });
+    await expect(access(join(fixture.root, "docs", "applied-a.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("rawFetch");
+  });
+
+  test("rolls back earlier writes when a later filesystem operation fails", async () => {
+    const fixture = await createRepoFixture();
+    const markerPath = join(fixture.root, "docs", "atomic-marker.md");
+    const sandbox = new FailAfterMarkerSandbox(fixture.root, markerPath, "docs/guide.md");
+    const service = new WriteChangesService(
+      fixture.root,
+      sandbox,
+      new WritePolicy({ enabled: true, allowed_globs: ["docs/**"] })
+    );
+
+    await expect(service.apply({
+      changes: [
+        { type: "write", path: "./docs/atomic-marker.md", content: "temporary\n" },
+        { type: "append", path: "docs/guide.md", content: "never\n" }
+      ]
+    })).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "Atomic edit pack failed and was rolled back.",
       diagnostics: {
-        applied_paths: ["docs/applied-a.md"],
-        failed_path: "src/app.ts",
-        recovery_hint: expect.stringContaining("repo_git_review")
+        rolled_back_paths: ["docs/atomic-marker.md"],
+        failed_path: "docs/guide.md"
       }
     });
-    await expect(readFile(join(fixture.root, "docs", "applied-a.md"), "utf8")).resolves.toBe("A\n");
-    await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("rawFetch");
+
+    await expect(access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\n");
+  });
+
+  test("rejects target drift between prevalidation and apply", async () => {
+    const fixture = await createRepoFixture();
+    const targetPath = join(fixture.root, "docs", "guide.md");
+    const service = new WriteChangesService(
+      fixture.root,
+      new MutateOnSecondResolveSandbox(fixture.root, targetPath),
+      new WritePolicy({ enabled: true, allowed_globs: ["docs/**"] })
+    );
+
+    await expect(service.apply({
+      changes: [
+        { type: "append", path: "docs/guide.md", content: "pack change\n" }
+      ]
+    })).rejects.toMatchObject({
+      code: "WRITE_STALE_EXPECTED_SHA"
+    });
+
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("external change\n");
   });
 
   test("invalid UTF-8 edit target fails", async () => {
@@ -419,4 +535,8 @@ describe("WriteChangesService", () => {
 
 function createService(root: string, policy: WritePolicyConfig) {
   return new WriteChangesService(root, new PathSandbox(root), new WritePolicy(policy));
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }

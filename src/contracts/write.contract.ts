@@ -11,7 +11,9 @@ export const WriteSimpleChangeSchema = z.object({
   path: z.string().min(1).describe("Repo-relative POSIX path to write or edit. Absolute paths, traversal, symlink escapes, denied globs, and hard-risk secret paths are rejected."),
   content: z.string().optional().describe("UTF-8 text to write, append, prepend, or insert. Required for write, append, prepend, insert_before, and insert_after."),
   find: z.string().min(1).optional().describe("Exact text anchor for replace, insert_before, and insert_after. The text must appear exactly once."),
-  replace: z.string().optional().describe("Replacement text for replace. Required when type is replace.")
+  replace: z.string().optional().describe("Replacement text for replace. Required when type is replace."),
+  expected_old_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Optional stale-state guard requiring the existing file SHA-256 to match before writing."),
+  expected_missing: z.boolean().optional().describe("Optional stale-state guard requiring the target path to be missing before writing.")
 });
 
 export const WriteGroupedEditItemSchema = z.object({
@@ -24,7 +26,9 @@ export const WriteGroupedEditItemSchema = z.object({
 export const WriteGroupedEditChangeSchema = z.object({
   type: z.enum(["edit"]).describe("Grouped same-file exact-match edits. Use when several controlled edits must be applied to one existing file."),
   path: z.string().min(1).describe("Repo-relative POSIX path to an existing UTF-8 text file. Absolute paths, traversal, symlink escapes, denied globs, and hard-risk secret paths are rejected."),
-  edits: z.array(WriteGroupedEditItemSchema).min(1).max(25).describe("Ordered exact-match edits to apply in memory before writing the file once.")
+  edits: z.array(WriteGroupedEditItemSchema).min(1).max(25).describe("Ordered exact-match edits to apply in memory before writing the file once."),
+  expected_old_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Optional stale-state guard requiring the existing file SHA-256 to match before writing."),
+  expected_missing: z.boolean().optional().describe("Optional stale-state guard requiring the target path to be missing before writing.")
 });
 
 export const WriteChangeSchema = z.union([WriteSimpleChangeSchema, WriteGroupedEditChangeSchema]);
@@ -37,6 +41,9 @@ export const WriteFileInputSchema = RepoInputSchema.extend({
   replace: z.string().optional().describe("Replacement text for replace. Required when action is replace."),
   create_dirs: z.boolean().optional().describe("Create missing parent directories inside the approved repo root when policy allows the target path."),
   dry_run: z.boolean().optional().describe("Validate policy, path, size, and content checks and compute the result without writing to disk."),
+  expected_old_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Optional stale-state guard requiring the existing file SHA-256 to match before writing."),
+  expected_missing: z.boolean().optional().describe("Optional stale-state guard requiring the target path to be missing before writing."),
+  expected_head_sha: z.string().regex(/^[a-f0-9]{40}$/).optional().describe("Optional stale-state guard requiring git HEAD to match before writing."),
   reason: z.string().min(1).optional().describe("Short human-readable reason for the write request, useful for audit context.")
 });
 
@@ -56,8 +63,9 @@ export const WriteFileResultSchema = z.object({
 });
 
 export const WriteChangesInputSchema = RepoInputSchema.extend({
-  changes: z.array(WriteChangeSchema).min(1).max(25).describe("Ordered edit pack of one-file write or exact-match edit changes to apply. Changes are applied sequentially and no git stage or commit is performed."),
+  changes: z.array(WriteChangeSchema).min(1).max(25).describe("Ordered atomic edit pack of one-file write or exact-match edit changes. Every change is validated before writing; a later runtime failure rolls earlier writes back. No git stage or commit is performed."),
   dry_run: z.boolean().optional().describe("Validate and preview the edit pack without writing files. Dry run is optional and is not required before applying changes."),
+  expected_head_sha: z.string().regex(/^[a-f0-9]{40}$/).optional().describe("Optional stale-state guard requiring git HEAD to match before applying the edit pack."),
   reason: z.string().min(1).optional().describe("Short human-readable reason for the edit-pack request, useful for audit context.")
 });
 

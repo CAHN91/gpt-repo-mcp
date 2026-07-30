@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { atomicWriteJson, isNotFoundError } from "../runtime/fs-helpers.js";
 import { RepoReaderConfigSchema, type RepoReaderConfig } from "./schema.js";
 
 export function resolveConfigPath(options: {
@@ -32,28 +33,5 @@ export async function readConfigDocument(configPath: string): Promise<unknown> {
 }
 
 export async function writeConfigAtomic(configPath: string, config: RepoReaderConfig): Promise<void> {
-  const payload = `${JSON.stringify(config, null, 2)}\n`;
-  await mkdir(dirname(configPath), { recursive: true });
-  const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-
-  try {
-    await writeFile(tempPath, payload, "utf8");
-    await rename(tempPath, configPath);
-  } catch (error) {
-    try {
-      await unlink(tempPath);
-    } catch {
-      // Best effort cleanup.
-    }
-    throw error;
-  }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
+  await atomicWriteJson(configPath, config);
 }

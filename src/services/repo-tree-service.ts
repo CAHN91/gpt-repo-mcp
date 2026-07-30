@@ -13,25 +13,61 @@ export type TreeOptions = {
   include_generated?: boolean;
   include_dependencies?: boolean;
   cursor?: string;
+  exclude_prefixes?: string[];
 };
+
+type TreeEntry = {
+  path: string;
+  type: "file" | "directory" | "nested_repo" | "submodule";
+  size_bytes?: number;
+};
+
+type ParsedCursor =
+  | { kind: "path"; afterPath: string }
+  | { kind: "legacy"; remaining: number };
 
 export class RepoTreeService {
   private readonly ignoreEngine = new IgnoreEngine();
 
-  constructor(private readonly root: string, private readonly sandbox: PathSandbox) {}
+  constructor(private readonly sandbox: PathSandbox) {}
 
   async tree(options: TreeOptions) {
     const start = validateRepoPath(options.path ?? ".");
     const maxDepth = Math.min(options.max_depth ?? DEFAULT_LIMITS.max_depth, DEFAULT_LIMITS.max_depth);
-    const pageSize = Math.min(options.page_size ?? DEFAULT_LIMITS.max_tree_entries, DEFAULT_LIMITS.max_tree_entries);
+    const pageSize = Math.max(1, Math.min(options.page_size ?? DEFAULT_LIMITS.max_tree_entries, DEFAULT_LIMITS.max_tree_entries));
     const cursor = parseCursor(options.cursor);
     const includeFiles = options.include_files ?? true;
     const respectDefaultExcludes = options.respect_default_excludes ?? true;
-    const entries: Array<{ path: string; type: "file" | "directory" | "nested_repo" | "submodule"; size_bytes?: number }> = [];
+    const excludePrefixes = (options.exclude_prefixes ?? [])
+      .map(validateRepoPath)
+      .map((prefix) => prefix === "." ? prefix : prefix.replace(/\/+$/, ""));
+    const entries: TreeEntry[] = [];
     const excludedSummary: Record<string, number> = {};
+    if (isExcludedPrefix(start, excludePrefixes)) {
+      return {
+        entries,
+        excluded_summary: { consumer_excludes: 1 },
+        truncated: false,
+        next_cursor: undefined
+      };
+    }
+    let legacyRemaining = cursor.kind === "legacy" ? cursor.remaining : 0;
+    let pageFull = false;
+
+    const addEntry = (entry: TreeEntry): void => {
+      if (cursor.kind === "path" && compareTreePaths(entry.path, cursor.afterPath) <= 0) {
+        return;
+      }
+      if (legacyRemaining > 0) {
+        legacyRemaining -= 1;
+        return;
+      }
+      entries.push(entry);
+      pageFull = entries.length > pageSize;
+    };
 
     const walk = async (repoPath: string, depth: number): Promise<void> => {
-      if (depth > maxDepth) {
+      if (pageFull || depth > maxDepth) {
         return;
       }
 
@@ -41,16 +77,27 @@ export class RepoTreeService {
       }
       const boundary = await this.sandbox.classifyBoundary(repoPath);
       if (boundary.kind !== "normal" && repoPath !== ".") {
-        entries.push({ path: boundary.path, type: boundary.kind });
+        addEntry({ path: boundary.path, type: boundary.kind });
         return;
       }
       if (resolved.stat.isDirectory()) {
         if (repoPath !== ".") {
-          entries.push({ path: repoPath, type: "directory" });
+          addEntry({ path: repoPath, type: "directory" });
+          if (pageFull) {
+            return;
+          }
         }
         const children = await readdir(resolved.absolutePath, { withFileTypes: true });
         for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
           const childRepoPath = repoPath === "." ? child.name : `${repoPath}/${child.name}`;
+          if (isExcludedPrefix(childRepoPath, excludePrefixes)) {
+            excludedSummary.consumer_excludes = (excludedSummary.consumer_excludes ?? 0) + 1;
+            continue;
+          }
+          if (cursor.kind === "path" && subtreePrecedesCursor(childRepoPath, cursor.afterPath)) {
+            excludedSummary.cursor_skipped_subtrees = (excludedSummary.cursor_skipped_subtrees ?? 0) + 1;
+            continue;
+          }
           if (this.ignoreEngine.isSensitiveCandidate(childRepoPath)) {
             excludedSummary.secret_candidates = (excludedSummary.secret_candidates ?? 0) + 1;
             continue;
@@ -73,24 +120,26 @@ export class RepoTreeService {
             continue;
           }
           await walk(childRepoPath, depth + 1);
+          if (pageFull) {
+            break;
+          }
         }
         return;
       }
       if (includeFiles && resolved.stat.isFile()) {
-        entries.push({ path: repoPath, type: "file", size_bytes: Number(resolved.stat.size) });
+        addEntry({ path: repoPath, type: "file", size_bytes: Number(resolved.stat.size) });
       }
     };
 
     await walk(start, 0);
-    entries.sort((a, b) => a.path.localeCompare(b.path));
-    const pagedEntries = entries.slice(cursor, cursor + pageSize);
-    const nextIndex = cursor + pagedEntries.length;
-    const truncated = nextIndex < entries.length;
+    const pagedEntries = entries.slice(0, pageSize);
+    const truncated = entries.length > pageSize;
+    const lastPath = pagedEntries.at(-1)?.path;
     return {
       entries: pagedEntries,
       excluded_summary: excludedSummary,
       truncated,
-      next_cursor: truncated ? String(nextIndex) : undefined
+      next_cursor: truncated && lastPath ? encodeCursor(lastPath) : undefined
     };
   }
 
@@ -110,12 +159,59 @@ export class RepoTreeService {
   }
 }
 
-function parseCursor(cursor?: string): number {
+function parseCursor(cursor?: string): ParsedCursor {
   if (!cursor) {
-    return 0;
+    return { kind: "legacy", remaining: 0 };
+  }
+  if (cursor.startsWith("v2:")) {
+    try {
+      const decoded = Buffer.from(cursor.slice(3), "base64url").toString("utf8");
+      return { kind: "path", afterPath: validateRepoPath(decoded) };
+    } catch {
+      return { kind: "legacy", remaining: 0 };
+    }
   }
   const parsed = Number.parseInt(cursor, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  return { kind: "legacy", remaining: Number.isFinite(parsed) && parsed > 0 ? parsed : 0 };
+}
+
+function encodeCursor(path: string): string {
+  return `v2:${Buffer.from(path, "utf8").toString("base64url")}`;
+}
+
+function compareTreePaths(left: string, right: string): number {
+  const leftParts = left === "." ? [] : left.split("/");
+  const rightParts = right === "." ? [] : right.split("/");
+  const sharedLength = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const compared = leftParts[index].localeCompare(rightParts[index]);
+    if (compared !== 0) {
+      return compared;
+    }
+  }
+  return leftParts.length - rightParts.length;
+}
+
+function subtreePrecedesCursor(repoPath: string, cursorPath: string): boolean {
+  const pathParts = repoPath.split("/");
+  const cursorParts = cursorPath.split("/");
+  const sharedLength = Math.min(pathParts.length, cursorParts.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const compared = pathParts[index].localeCompare(cursorParts[index]);
+    if (compared < 0) {
+      return true;
+    }
+    if (compared > 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isExcludedPrefix(repoPath: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) =>
+    prefix === "." || repoPath === prefix || repoPath.startsWith(`${prefix}/`)
+  );
 }
 
 function isGeneratedPath(repoPath: string): boolean {

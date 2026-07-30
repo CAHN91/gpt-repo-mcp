@@ -3,14 +3,16 @@ import { realpath } from "node:fs/promises";
 import { z } from "zod";
 import { DEFAULT_LIMITS } from "../policies/limits.js";
 import { RepoReaderError } from "../runtime/errors.js";
-import { OperationsPolicyConfigSchema, WritePolicyConfigSchema } from "../config/schema.js";
+import { CodeIntelligenceConfigSchema, OperationsPolicyConfigSchema, WritePolicyConfigSchema } from "../config/schema.js";
+import { AgentRunnerConfigSchema } from "../delegation/runner-config.js";
 
 const RepoConfigSchema = z.object({
   repo_id: z.string().min(1),
   display_name: z.string().min(1),
   root: z.string().min(1),
   writes: WritePolicyConfigSchema.optional(),
-  operations: OperationsPolicyConfigSchema.optional()
+  operations: OperationsPolicyConfigSchema.optional(),
+  agent_runner: AgentRunnerConfigSchema.optional()
 });
 
 const ConfigSchema = z.object({
@@ -19,7 +21,8 @@ const ConfigSchema = z.object({
     max_files: z.number().int().positive().optional(),
     max_bytes_per_file: z.number().int().positive().optional(),
     max_total_bytes: z.number().int().positive().optional()
-  }).default({})
+  }).default({}),
+  code_intelligence: CodeIntelligenceConfigSchema.optional()
 });
 
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
@@ -29,7 +32,8 @@ type RepoReaderConfigInput = z.input<typeof ConfigSchema>;
 export class RootRegistry {
   private constructor(
     private readonly repos: RepoConfig[],
-    readonly limits: Required<RepoReaderConfig["limits"]>
+    readonly limits: Required<RepoReaderConfig["limits"]>,
+    readonly codeIntelligence: RepoReaderConfig["code_intelligence"]
   ) {}
 
   static async fromConfig(config: RepoReaderConfigInput): Promise<RootRegistry> {
@@ -42,7 +46,7 @@ export class RootRegistry {
       max_files: parsed.limits.max_files ?? DEFAULT_LIMITS.max_files,
       max_bytes_per_file: parsed.limits.max_bytes_per_file ?? DEFAULT_LIMITS.max_bytes_per_file,
       max_total_bytes: parsed.limits.max_total_bytes ?? DEFAULT_LIMITS.max_total_bytes
-    });
+    }, parsed.code_intelligence);
   }
 
   static async fromFile(configPath: string): Promise<RootRegistry> {

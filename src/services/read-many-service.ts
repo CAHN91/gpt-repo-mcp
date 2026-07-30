@@ -26,7 +26,6 @@ export type ReadManyResult = {
 
 export class ReadManyService {
   constructor(
-    private readonly root: string,
     private readonly sandbox: PathSandbox,
     private readonly limits: RootRegistry["limits"]
   ) {}
@@ -56,7 +55,10 @@ export class ReadManyService {
         totalBytes += file.size_bytes;
         files.push(file);
       } catch (error) {
-        skipped.push({ path, reason: toRepoReaderError(error).code });
+        const normalized = toRepoReaderError(error);
+        if (normalized.code !== "INTERNAL_ARTIFACT_BLOCKED") {
+          skipped.push({ path, reason: normalized.code });
+        }
       }
     }
 
@@ -75,7 +77,7 @@ export class ReadManyService {
   private async expandPaths(options: ReadManyOptions): Promise<string[]> {
     const explicitPaths = options.paths ?? [];
     const tree = options.include_globs?.length
-      ? await new RepoTreeService(this.root, this.sandbox).tree({ include_files: true, respect_default_excludes: true })
+      ? await new RepoTreeService(this.sandbox).tree({ include_files: true, respect_default_excludes: true })
       : { entries: [] };
     const globPaths = (options.include_globs ?? []).flatMap((glob) =>
       tree.entries

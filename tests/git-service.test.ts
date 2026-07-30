@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { RepoReaderError } from "../src/runtime/errors.js";
@@ -68,8 +68,26 @@ describe("GitService", () => {
 
     expect(result.truncated).toBe(true);
     expect(result.warnings).toEqual([
-      "Diff truncated by max_bytes (120). Increase max_bytes or pass paths to narrow the diff before reviewing."
+      "Diff content truncated by max_bytes (120); Git completed successfully."
     ]);
+  });
+
+  test("hides mixed-case internal runner artifacts from status and diff", async () => {
+    const root = await createGitFixture();
+    const path = ".ChAtGpT/CoDeX-RuNs/2026-07-13T170000Z-private/RuNnEr.SeSsIoN.JsOn";
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), '{"thread_id":"baseline"}\n');
+    await git(root, ["add", "-f", path]);
+    await git(root, ["commit", "-m", "private runner baseline"]);
+    await writeFile(join(root, path), '{"thread_id":"private-canary"}\n');
+
+    const service = new GitService(root);
+    const status = await service.status();
+    const diff = await service.diff({});
+
+    expect(status.files.map((file) => file.path)).not.toContain(path);
+    expect(diff.files.map((file) => file.path)).not.toContain(path);
+    expect(JSON.stringify({ status, diff })).not.toContain("private-canary");
   });
 });
 

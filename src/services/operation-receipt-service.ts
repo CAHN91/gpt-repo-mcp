@@ -1,19 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   LastWriteResultSchema,
+  OperationLedgerEntrySchema,
   OperationReceiptSchema,
   type LastWriteResult,
+  type OperationLedgerEntry,
   type OperationReceipt,
   type OperationReceiptRef
 } from "../contracts/operation-receipt.contract.js";
+import { atomicWriteJson, isNotFoundError } from "../runtime/fs-helpers.js";
 import { redactSensitiveText } from "../runtime/result-envelope.js";
 import { validateRepoPath } from "./path-sandbox.js";
 
 export const LAST_WRITE_RECEIPT_PATH = ".chatgpt/operations/last-write.json";
+export const OPERATION_LEDGER_PATH = ".chatgpt/operations/ledger.jsonl";
 
-type WriteLastWriteInput = Omit<OperationReceipt, "schema_version" | "operation_id" | "timestamp">;
+type WriteLastWriteInput = Omit<OperationReceipt, "schema_version" | "operation_id" | "timestamp"> & {
+  ledger_event_type?: OperationLedgerEntry["event_type"];
+};
 
 export class OperationReceiptService {
   constructor(private readonly root: string) {}
@@ -24,23 +30,25 @@ export class OperationReceiptService {
     warnings: string[];
   }> {
     try {
+      const { ledger_event_type: ledgerEventType, ...receiptInput } = input;
       const receipt: OperationReceipt = {
         schema_version: 1,
         operation_id: createOperationId(),
         timestamp: new Date().toISOString(),
-        ...sanitizeWriteInput(input)
+        ...sanitizeWriteInput(receiptInput)
       };
       const parsed = OperationReceiptSchema.parse(receipt);
       const absolutePath = join(this.root, LAST_WRITE_RECEIPT_PATH);
-      await mkdir(dirname(absolutePath), { recursive: true });
       await atomicWriteJson(absolutePath, parsed);
+      const ledgerResult = await this.appendLedgerEntry(parsed, ledgerEventType);
       return {
         ok: true,
         operation_receipt: {
           operation_id: parsed.operation_id,
-          path: LAST_WRITE_RECEIPT_PATH
+          path: LAST_WRITE_RECEIPT_PATH,
+          ...(ledgerResult.ok ? { ledger_path: OPERATION_LEDGER_PATH } : {})
         },
-        warnings: []
+        warnings: ledgerResult.ok ? [] : ledgerResult.warnings
       };
     } catch {
       return { ok: false, warnings: ["OPERATION_RECEIPT_WRITE_FAILED"] };
@@ -70,15 +78,56 @@ export class OperationReceiptService {
       return missing("INVALID_LAST_WRITE_RECEIPT");
     }
   }
+
+  private async appendLedgerEntry(receipt: OperationReceipt, eventType: OperationLedgerEntry["event_type"] = "write_applied"): Promise<{ ok: boolean; warnings: string[] }> {
+    try {
+      const entry: OperationLedgerEntry = OperationLedgerEntrySchema.parse({
+        ...receipt,
+        ledger_schema_version: 1,
+        ledger_entry_id: createLedgerEntryId(),
+        event_type: eventType,
+        validation_ids: receipt.validation_ids ?? [],
+        ledger_path: OPERATION_LEDGER_PATH
+      });
+      const absolutePath = join(this.root, OPERATION_LEDGER_PATH);
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await appendFile(absolutePath, `${JSON.stringify(entry)}\n`, "utf8");
+      return { ok: true, warnings: [] };
+    } catch {
+      return { ok: false, warnings: ["OPERATION_LEDGER_APPEND_FAILED"] };
+    }
+  }
 }
 
 function sanitizeWriteInput(input: WriteLastWriteInput): WriteLastWriteInput {
+  assertSafeText(input.summary);
   return {
     ...input,
     touched_paths: uniqueSafePaths(input.touched_paths),
     changed_paths: uniqueSafePaths(input.changed_paths),
     created_paths: uniqueSafePaths(input.created_paths),
-    modified_paths: uniqueSafePaths(input.modified_paths)
+    modified_paths: uniqueSafePaths(input.modified_paths),
+    ...(input.files
+      ? {
+          files: input.files.map((file) => ({
+            ...file,
+            path: validateRepoPath(file.path)
+          }))
+        }
+      : {}),
+    ...(input.rollback_hint
+      ? {
+          rollback_hint: {
+            ...input.rollback_hint,
+            reason: safeText(input.rollback_hint.reason),
+            paths: input.rollback_hint.paths.map((pathHint) => ({
+              ...pathHint,
+              path: validateRepoPath(pathHint.path),
+              reason: safeText(pathHint.reason)
+            }))
+          }
+        }
+      : {})
   };
 }
 
@@ -99,6 +148,17 @@ function uniqueSafePaths(paths: string[]): string[] {
   return [...new Set(paths.map((path) => validateRepoPath(path)))];
 }
 
+function safeText(value: string): string {
+  assertSafeText(value);
+  return value;
+}
+
+function assertSafeText(value: string): void {
+  if (redactSensitiveText(value) !== value) {
+    throw new Error("Unsafe receipt text.");
+  }
+}
+
 function isSafeRepoPath(path: string): boolean {
   try {
     return validateRepoPath(path) === path && !path.startsWith("/");
@@ -116,26 +176,10 @@ function missing(warning: "NO_LAST_WRITE_RECEIPT" | "INVALID_LAST_WRITE_RECEIPT"
   };
 }
 
-async function atomicWriteJson(path: string, value: OperationReceipt): Promise<void> {
-  const tempPath = join(dirname(path), `.${basename(path)}.${process.pid}-${randomUUID()}.tmp`);
-  try {
-    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true });
-    throw error;
-  }
-}
-
 function createOperationId(): string {
   return `write-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
+function createLedgerEntryId(): string {
+  return `ledger-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }

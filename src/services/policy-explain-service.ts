@@ -9,7 +9,7 @@ import { OperationsPolicy } from "./operations-policy.js";
 
 export type PolicyExplainOptions = {
   path?: string;
-  operation?: "read" | "write" | "cleanup";
+  operation?: "read" | "write" | "cleanup" | "validation";
 };
 
 type Decision = {
@@ -34,15 +34,17 @@ export class PolicyExplainService {
     const read = this.explainRead(path, pathResult?.error);
     const write = this.explainWrite(path, pathResult?.error, writePolicy);
     const cleanup = this.explainCleanup(path, pathResult?.error, operationsPolicy);
+    const validation = this.explainValidation(operationsPolicy);
     const operations = {
       enabled: operationsPolicy.config.enabled,
       git_stage_enabled: operationsPolicy.config.git_stage_enabled,
       git_commit_enabled: operationsPolicy.config.git_commit_enabled,
+      validation_enabled: operationsPolicy.config.validation_enabled,
       cleanup_enabled: operationsPolicy.config.cleanup_enabled,
       max_paths_per_operation: operationsPolicy.config.max_paths_per_operation
     };
 
-    const focused = options.operation ? { read, write, cleanup }[options.operation] : undefined;
+    const focused = options.operation ? { read, write, cleanup, validation }[options.operation] : undefined;
     const summary = focused
       ? `${options.operation} policy for ${path ?? "this repository"}: ${focused.reason}`
       : summarize(path, read, write, cleanup, operationsPolicy.config.enabled);
@@ -56,6 +58,7 @@ export class PolicyExplainService {
       read,
       write,
       cleanup,
+      validation,
       operations,
       effective_policy: {
         write_enabled: writePolicy.config.enabled,
@@ -65,7 +68,7 @@ export class PolicyExplainService {
         default_read_excludes: [...DEFAULT_EXCLUDES],
         cleanup_allowed_globs: operationsPolicy.config.cleanup_allowed_globs
       },
-      guidance: guidance(path, read, write, cleanup, operationsPolicy.config.enabled)
+      guidance: guidance(path, read, write, cleanup, validation, operationsPolicy.config.enabled)
     };
   }
 
@@ -114,7 +117,7 @@ export class PolicyExplainService {
   private explainCleanup(path: string | undefined, pathError: RepoReaderError | undefined, policy: OperationsPolicy): Decision {
     if (!path) {
       if (!policy.config.enabled) {
-        return blocked("OPERATIONS_DISABLED", "Local operations are disabled for this repository.", [], ["Use --mode ship for trusted repositories when local stage, commit, recover, and cleanup should be available."]);
+        return blocked("OPERATIONS_DISABLED", "Local operations are disabled for this repository.", [], ["Use --mode ship for trusted repositories when local validation, stage, commit, recover, and cleanup should be available."]);
       }
       if (!policy.config.cleanup_enabled) {
         return blocked("CLEANUP_DISABLED", "Cleanup operations are disabled for this repository.", [], []);
@@ -142,6 +145,22 @@ export class PolicyExplainService {
     }
     return allowed("ALLOWED", `${path} is cleanup-eligible if it exists and is untracked by git.`, matched, [
       "Cleanup refuses tracked files and does not run git clean."
+    ]);
+  }
+
+  private explainValidation(policy: OperationsPolicy): Decision {
+    if (!policy.config.enabled) {
+      return blocked("OPERATIONS_DISABLED", "Local operations are disabled for this repository.", [], [
+        "Use --mode ship for trusted repositories when local validation, stage, commit, recover, and cleanup should be available."
+      ]);
+    }
+    if (!policy.config.validation_enabled) {
+      return blocked("VALIDATION_DISABLED", "Validation operations are disabled for this repository.", [], [
+        "Enable operations.validation_enabled for trusted repositories that should run allowlisted validation profiles."
+      ]);
+    }
+    return allowed("GENERAL_VALIDATION_POLICY", "Validation is enabled for allowlisted project runner profiles.", [], [
+      "repo_validate prioritizes matching npm scripts, safely selects an exact repo-declared Node.js version when already installed, and may use pytest fallback for detected Python tests; it never installs runtimes, accepts command strings, or uses a shell."
     ]);
   }
 }
@@ -197,7 +216,7 @@ function summarize(path: string | undefined, read: Decision, write: Decision, cl
   return `${path} is readable, writable, and cleanup-eligible under the current policy constraints.`;
 }
 
-function guidance(path: string | undefined, read: Decision, write: Decision, cleanup: Decision, operationsEnabled: boolean): string[] {
+function guidance(path: string | undefined, read: Decision, write: Decision, cleanup: Decision, validation: Decision, operationsEnabled: boolean): string[] {
   const items: string[] = [];
   if (!path) {
     items.push("Pass a repo-relative path to explain exactly why a specific read, write, or cleanup call would be allowed or blocked.");
@@ -211,8 +230,11 @@ function guidance(path: string | undefined, read: Decision, write: Decision, cle
   if (!cleanup.allowed && operationsEnabled) {
     items.push(`For cleanup failures, check cleanup.code=${cleanup.code}; cleanup only deletes explicit untracked paths matching cleanup_allowed_globs.`);
   }
+  if (!validation.allowed && validation.code === "VALIDATION_DISABLED") {
+    items.push("Enable operations.validation_enabled for trusted repositories that should run allowlisted validation profiles.");
+  }
   if (!operationsEnabled) {
-    items.push("Use --mode ship for trusted repositories when local stage, commit, recover, and cleanup operations should be enabled.");
+    items.push("Use --mode ship for trusted repositories when local validation, stage, commit, recover, and cleanup operations should be enabled.");
   }
   return items;
 }

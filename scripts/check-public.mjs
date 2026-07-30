@@ -4,8 +4,7 @@ import process from "node:process";
 
 const forbiddenPublicFiles = [
   "MASTER_PROMPT.md",
-  "docs/CHATGPT_DEV_MODE.md",
-  "AGENTS.md"
+  "docs/CHATGPT_DEV_MODE.md"
 ];
 
 const forbiddenTrackedArtifacts = {
@@ -18,7 +17,12 @@ const forbiddenTrackedArtifacts = {
     ".agent-recorder/",
     ".agentbus/"
   ],
-  patterns: []
+  patterns: [
+    {
+      regex: /(?:^|\/)[^/]+\.local\.json(?:\.[^/]+)?$/,
+      label: "local config or local config backup"
+    }
+  ]
 };
 
 const scanRoots = [
@@ -28,11 +32,16 @@ const scanRoots = [
   "LICENSE",
   "package.json",
   "config.example.json",
+  ".gitleaks.toml",
+  ".gitleaksignore",
   ".gitignore",
   ".npmignore",
   "docs/",
+  "security/",
   "src/",
-  "scripts/"
+  "scripts/",
+  "tools/",
+  "AGENTS.md"
 ];
 
 const excludedScanPaths = [

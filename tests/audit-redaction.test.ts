@@ -141,4 +141,34 @@ describe("audit redaction", () => {
     expect(parsed.mcp_method?.length).toBeLessThanOrEqual(128);
     expect(parsed.mcp_tool?.length).toBeLessThanOrEqual(128);
   });
+
+  test("request errors log only an allowlisted category and request correlation", () => {
+    const lines: string[] = [];
+    const originalError = console.error;
+    console.error = (message?: unknown) => {
+      lines.push(String(message));
+    };
+
+    try {
+      requestAudit({
+        event: "mcp_request_error",
+        request_id: "req_safe_category",
+        http_method: "POST",
+        route: "/mcp",
+        status_code: 500,
+        error_category: "server_initialization"
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      event: "mcp_request_error",
+      request_id: "req_safe_category",
+      error_category: "server_initialization"
+    });
+    expect(lines[0]).not.toContain("stack");
+    expect(lines[0]).not.toContain("message");
+    expect(lines[0]).not.toContain("body");
+  });
 });

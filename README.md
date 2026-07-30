@@ -23,13 +23,35 @@ This project is not affiliated with OpenAI, ChatGPT, Anthropic, or the Model Con
 - Keep ChatGPT work organized with local session handoff notes for future ChatGPT chats.
 - Ask why a path is blocked with `repo_policy_explain`.
 
-## Core Workflow
+## Canonical Development Workflow
 
-1. ChatGPT reads the repo and plans the change.
-2. ChatGPT can implement directly with single-file or multi-file writes.
-3. Or ChatGPT can prepare a focused Codex/Claude task for another agent to run.
-4. ChatGPT reviews the actual git diff and any Codex/Claude result written back into the repo.
-5. ChatGPT recommends the next step: revise, recover, stage, or create a local commit.
+1. Read `repo_project_brief` when product or repository context is needed, or `repo_current_work_session` when resuming. Active and blocked continuity includes the full session; completed current-pointer history is compact and requires an explicit `work_session_id` lookup for full details.
+2. Locate evidence with `repo_search`, then read only the relevant files with `repo_fetch_file` or `repo_read_many`. Use context or symbol mapping only when impact analysis requires it.
+3. Implement directly with `repo_write_file` or `repo_write_changes` by default. Use agent delegation only when the user explicitly asks for it.
+4. Validate through an allowlisted `repo_validate` profile.
+5. Review with `repo_ship_review` for bounded pre-ship readiness, or `repo_git_review` for Git and recovery planning.
+6. Use the exact review-provided `repo_write_stage_commit` payload when the change is ready, or `repo_write_recover` when it is not.
+
+Backlog inventory, decision memory, patchsets, delegation, standalone semantic review, and granular Git tools are specialist paths rather than required workflow steps.
+
+## Drift Monitoring
+
+`repo_agent_runs` list mode includes a bounded, deterministic `drift_summary` for validated Delegation v3 history. It can surface correction loops, repeated scope extensions, growing prompts or authorization, repeated changed areas, failed product reviews, technical-root dominance, and checkpoint cadence. `repo_project_brief.product_brief` exposes only the compact checkpoint state.
+
+These signals are advisory evidence. They never select the next feature, replace the current work session, add workflow steps, or mutate the repository. The repository test suite locks the canonical 46-tool surface and prevents removed tools, aliases, legacy creation workflows, or an unreviewed integration bypass from silently returning.
+
+## Reviewed multi-run integration
+
+Several related Delegation v3 runs may intentionally share one dirty worktree. Each run is reviewed and attested against only its attributed path bytes. The owner can then call `repo_write_integration_review` to create an exact, hash-bound integration pathset and use the returned token for one atomic local `repo_write_stage_commit`. Extra paths, stale bytes, failed product verdicts, stale validation, forbidden/secret paths, or incomplete semantic evidence block. No force or push route is added.
+
+## Architecture and Delegation
+
+The stable public architecture is documented in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Delegation is a repository-owned
+artifact and review protocol; the public server does not include or start an
+agent runner. See
+[docs/DELEGATION_ARTIFACTS.md](docs/DELEGATION_ARTIFACTS.md) for its persisted
+contracts, privacy boundary, stale-state rules, and multi-run integration flow.
 
 ## Quickstart
 
@@ -91,7 +113,7 @@ Clone -> Install -> Add repo -> Choose mode -> Connect ChatGPT -> Start working
 | --- | --- | --- |
 | `read` | First install, project review, cautious exploration | Inspect repo structure, search/read files, review git status and diffs, plan work. |
 | `write` | Daily implementation help | Everything in `read`, plus repo file writes guarded by policy, path checks, secret checks, and size limits. |
-| `ship` | Local commit prep | Everything in `write`, plus local stage, commit, recover, and cleanup operations after approval. |
+| `ship` | Local commit prep | Everything in `write`, plus local validation, stage, commit, recover, and cleanup operations after host approval. |
 
 No mode enables push, pull, reset, checkout, switch, rebase, merge, stash, force, branch deletion, shell execution, or arbitrary command execution.
 
@@ -124,7 +146,7 @@ Can you write to src/app.ts in <repo_id>? Explain which policy allows or blocks 
 ```
 
 ```text
-Prepare a focused Codex prompt for implementing dashboard filters in <repo_id>. Include files to inspect and verification commands.
+Prepare a product-grounded Delegation v3 task for implementing dashboard filters in <repo_id>. Keep starting points advisory, authorization explicit, and product and technical acceptance separate.
 ```
 
 ```text
@@ -141,54 +163,38 @@ Codex is done. Review the Codex result and the git diff for <repo_id>.
 | --- | --- |
 | Repo discovery | `repo_list_roots`, `repo_tree`, `repo_search`, `repo_fetch_file`, `repo_read_many` |
 | Policy help | `repo_policy_explain` |
-| Planning | `repo_project_brief`, `repo_task_inventory`, `repo_decision_memory`, `repo_change_plan`, `repo_next_action`, `repo_plan_review` |
+| Context and planning | `repo_project_brief`, `repo_current_work_session`, `repo_change_plan`, `repo_context_map`, `repo_symbol_context`, `repo_code_index`, `repo_task_inventory`, `repo_decision_memory` |
+| Diagnosis and ship review | `repo_failure_diagnose`, `repo_semantic_review`, `repo_ship_review` |
 | Git review | `repo_git_status`, `repo_git_diff`, `repo_git_review` |
 | File writes | `repo_write_file`, `repo_write_changes` |
 | ChatGPT session continuity | `repo_write_handoff`, `repo_last_write` |
-| Local ship flow | `repo_write_stage`, `repo_write_unstage`, `repo_write_commit`, `repo_write_stage_commit`, `repo_write_recover`, `repo_cleanup_paths` |
-| Compatibility aliases | `repo_git_stage`, `repo_git_unstage`, `repo_git_commit` |
-| Codex/Claude coordination | `repo_prepare_codex_task`, `repo_write_codex_task`, `repo_codex_review` |
+| Local ship flow | `repo_validate`, `repo_write_stage`, `repo_write_unstage`, `repo_write_commit`, `repo_write_stage_commit`, `repo_write_recover`, `repo_cleanup_paths` |
+| Codex/Claude coordination | `repo_prepare_codex_task`, `repo_write_codex_task`, `repo_agent_runs`, `repo_write_agent_reply`, `repo_codex_review` |
 
 See [docs/TOOL_SURFACE.md](docs/TOOL_SURFACE.md) for full schemas, examples, output shapes, and recommended workflows.
 
-## Codex/Claude Task Flow
+## Codex/Claude Delegation v3 Flow
 
-GPT Repo MCP supports two ways to coordinate focused external-agent work.
+Direct ChatGPT implementation remains the default. Use delegation tools only when the user explicitly asks for a Codex prompt, repo-local task, or implementation-agent run.
 
-### Chat-Copy Mode
-
-Ask ChatGPT for a focused Codex/Claude prompt:
-
-```text
-Prepare a focused Codex prompt for fixing login expiry. Include the files to inspect and the verification command.
-```
-
-ChatGPT returns a copyable prompt in the chat. You can review it, edit it, and paste it into Codex or Claude.
-
-### Repo-Local Mode
-
-Ask ChatGPT to write the task into the repo:
-
-```text
-Write a repo-local Codex task for fixing login expiry.
-```
-
-The MCP writes:
+For preview-only chat-copy mode, `repo_prepare_codex_task` validates a strict Delegation v3 task without writing it. For durable repo-local delegation, `repo_write_codex_task` writes:
 
 - `.chatgpt/codex-runs/<run_id>/PROMPT.md`
 - `.chatgpt/codex-runs/<run_id>/run.json`
+- `.chatgpt/codex-runs/<run_id>/review-gate.json`
 
-Give Codex or Claude the returned prompt path. The generated task asks the agent to write:
+Every new task declares a task kind, beneficiary, current problem, desired outcome, why-now, advisory starting points, an authorization boundary, hard constraints, preservation rules, exclusions, and separate product and technical acceptance criteria where applicable. The agent writes strict machine-readable evidence to `RESULT.json`; v3 does not use `RESULT.md` as result evidence.
 
-- `.chatgpt/codex-runs/<run_id>/RESULT.md`
-
-Then ask ChatGPT:
+Use `repo_agent_runs` for bounded lifecycle status and structured questions. After the agent finishes:
 
 ```text
-Review the Codex result and the git diff for <run_id>.
+repo_codex_review
+→ repo_write_codex_review
+→ repo_ship_review
+→ repo_write_stage_commit or repo_write_recover
 ```
 
-ChatGPT can read the result, inspect the diff, and recommend the next step.
+`repo_codex_review` verifies prompt, manifest, baseline, authorization, connected changes, TAC evidence, PAC evidence, and technical readiness. `repo_write_codex_review` records the state-bound qualitative product verdict. Only a current passing or valid technical-only attestation can open the shared ship gate. Historical v1/v2 runs remain reviewable through isolated legacy readers, but cannot be newly created.
 
 ## ChatGPT Session Handoffs
 
@@ -235,13 +241,26 @@ Read the full model in [docs/SECURITY.md](docs/SECURITY.md).
 
 New to ngrok? See [Install ngrok from zero](docs/SETUP.md#install-ngrok-from-zero).
 
+## Upgrading
+
+Version 0.2.0 adds new review, validation, work-session, patchset, code-context,
+and delegation capabilities. Five overlapping 0.1.x tool names have canonical
+replacements. See the [0.2.0 migration guide](docs/MIGRATION.md) before
+refreshing the connector.
+
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
+- [Migrating from 0.1.x](docs/MIGRATION.md)
+- [Product and UX contract](docs/PRODUCT.md)
+- [Current and compatibility terminology](docs/GLOSSARY.md)
 - [Setup](docs/SETUP.md)
 - [ChatGPT connector steps](docs/CHATGPT_CONNECT.md)
 - [Connection options](docs/CONNECTION_OPTIONS.md)
 - [Tool surface](docs/TOOL_SURFACE.md)
 - [Write workflows](docs/WRITE_WORKFLOWS.md)
+- [Delegation artifact protocol](docs/DELEGATION_ARTIFACTS.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 

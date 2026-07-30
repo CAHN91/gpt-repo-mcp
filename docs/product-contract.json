@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "product": {
+    "name": "GPT Repo MCP",
+    "purpose": "Help a solo developer use ChatGPT as a product-aware senior developer, reviewer, and workflow coordinator in trusted local repositories while preserving strong server-side safety, evidence, recovery, and local control."
+  },
+  "primary_users": [
+    {
+      "id": "solo-developer",
+      "role": "Solo developer or small-team technical owner",
+      "technical_level": "Technical, but time-constrained and unable to continuously supervise every agent step",
+      "work_context": "Uses ChatGPT and implementation agents across multiple local repositories and needs fast, trustworthy progress without repeatedly reconstructing project context."
+    },
+    {
+      "id": "repo-operator",
+      "role": "Developer operating ChatGPT, Codex, or another implementation agent against a trusted local repository",
+      "technical_level": "Comfortable with code and Git, but expects the tooling to preserve product intent and prevent unsafe or incomplete repository operations",
+      "work_context": "Delegates planning, implementation, review, validation, recovery, and local ship work through named MCP tools."
+    }
+  ],
+  "jobs_to_be_done": [
+    {
+      "id": "understand-repository",
+      "statement": "Understand a repository, its product intent, architecture, current state, and relevant constraints without reading everything manually."
+    },
+    {
+      "id": "delegate-coherent-work",
+      "statement": "Delegate coherent implementation work to an agent without converting the product goal into a brittle file-by-file script."
+    },
+    {
+      "id": "review-real-changes",
+      "statement": "Review actual code, Git state, validation evidence, and product outcome rather than trusting an agent summary."
+    },
+    {
+      "id": "ship-and-recover-safely",
+      "statement": "Validate, recover, stage, and create local commits through bounded server-side workflows without arbitrary shell access."
+    },
+    {
+      "id": "preserve-continuity",
+      "statement": "Continue work across sessions and agents without losing decisions, product direction, or current implementation state."
+    }
+  ],
+  "must_reduce": [
+    "Repeatedly explaining the same repository and product context",
+    "Babysitting implementation agents through every internal step",
+    "Prompt micromanagement and closed-world file-by-file delegation",
+    "Risky manual repository operations that lack review or recovery evidence",
+    "Context loss between ChatGPT sessions, Codex runs, reviews, and commits",
+    "Technically correct changes that move a product away from its intended user"
+  ],
+  "must_not_become": [
+    "A generic shell or unrestricted command runner",
+    "A safety-ceremony server that makes trusted local development slower than direct work",
+    "A prompt factory that optimizes for local technical tasks while forgetting the product and user",
+    "An enterprise workflow or approval platform",
+    "A hosted repository service or source-code exfiltration path",
+    "A replacement for Git, the implementation agent, or product judgment"
+  ],
+  "experience_principles": [
+    "Product or operational outcome before implementation detail",
+    "Autonomy with safety implemented mostly as server-side infrastructure",
+    "A small number of high-leverage tools over visible workflow ceremony",
+    "Repository truth and actual diff evidence over agent claims",
+    "Explicit recovery and stale-state protection",
+    "Local-first operation with no automatic push or deployment",
+    "Technical precision when it represents a real contract, not habitual micromanagement"
+  ],
+  "canonical_docs": [
+    "README.md",
+    "docs/PRODUCT.md",
+    "docs/ARCHITECTURE.md",
+    "docs/DELEGATION_ARTIFACTS.md",
+    "docs/SECURITY.md",
+    "docs/WRITE_WORKFLOWS.md"
+  ],
+  "governance": {
+    "mode": "advisory",
+    "product_review_required_for": [
+      "product_slice",
+      "product_correction"
+    ],
+    "checkpoint_every_root_runs": 5
+  }
+}

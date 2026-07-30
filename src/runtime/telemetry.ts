@@ -31,10 +31,19 @@ export type RequestAuditEvent = {
   route: string;
   status_code?: number;
   duration_ms?: number;
+  error_category?: McpRequestErrorCategory;
   mcp_session?: "present" | "missing";
   mcp_method?: string;
   mcp_tool?: string;
 };
+
+export type McpRequestErrorCategory =
+  | "invalid_session"
+  | "session_capacity"
+  | "transport_request"
+  | "transport_close"
+  | "server_initialization"
+  | "internal";
 
 const requestTelemetry = new AsyncLocalStorage<RequestTelemetryContext>();
 const AUDIT_LABEL_MAX_LENGTH = 128;
@@ -141,6 +150,7 @@ export function formatRequestAuditLine(event: RequestAuditEvent): string {
     event.http_method,
     event.route,
     event.duration_ms === undefined ? undefined : `${event.duration_ms}ms`,
+    event.error_category ? `category=${event.error_category}` : undefined,
     event.mcp_method,
     event.mcp_tool,
     `req=${shortRequestId(event.request_id)}`
@@ -178,10 +188,22 @@ export function createRequestAuditEvent(event: RequestAuditEvent): RequestAuditE
     route: event.route,
     status_code: event.status_code,
     duration_ms: event.duration_ms,
+    error_category: sanitizeErrorCategory(event.error_category),
     mcp_session: event.mcp_session,
     mcp_method: sanitizeAuditLabel(event.mcp_method),
     mcp_tool: sanitizeAuditLabel(event.mcp_tool)
   };
+}
+
+function sanitizeErrorCategory(value: McpRequestErrorCategory | undefined): McpRequestErrorCategory | undefined {
+  return [
+    "invalid_session",
+    "session_capacity",
+    "transport_request",
+    "transport_close",
+    "server_initialization",
+    "internal"
+  ].includes(value ?? "") ? value : undefined;
 }
 
 export function requestAudit(event: RequestAuditEvent): void {

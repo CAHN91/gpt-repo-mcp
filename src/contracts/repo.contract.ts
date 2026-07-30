@@ -12,7 +12,7 @@ export const RepoTreeInputSchema = RepoInputSchema.extend({
   respect_default_excludes: z.boolean().optional(),
   include_generated: z.boolean().optional(),
   include_dependencies: z.boolean().optional(),
-  cursor: z.string().optional()
+  cursor: z.string().optional().describe("Opaque cursor returned by a previous repo_tree call with the same path and filters.")
 });
 
 export const RepoSummarySchema = z.object({

@@ -21,13 +21,13 @@ export class SearchService {
   private readonly ignoreEngine = new IgnoreEngine();
   private readonly classifier = new FileClassifier(this.ignoreEngine);
 
-  constructor(private readonly root: string, private readonly sandbox: PathSandbox) {}
+  constructor(private readonly sandbox: PathSandbox) {}
 
   async search(options: SearchOptions) {
     const maxResults = Math.min(options.max_results ?? DEFAULT_LIMITS.max_search_results, DEFAULT_LIMITS.max_search_results);
     const contextLines = Math.min(options.context_lines ?? 0, 5);
     const start = parseCursor(options.cursor);
-    const tree = await new RepoTreeService(this.root, this.sandbox).tree({
+    const tree = await new RepoTreeService(this.sandbox).tree({
       include_files: true,
       respect_default_excludes: true
     });

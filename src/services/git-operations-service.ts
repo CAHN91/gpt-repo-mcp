@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
+import { lstat, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   GitCommitResult,
   GitRecoverResult,
@@ -11,20 +9,29 @@ import type {
   GitUnstageResult
 } from "../contracts/git-operations.contract.js";
 import { RepoReaderError } from "../runtime/errors.js";
+import { isNotFoundError } from "../runtime/fs-helpers.js";
 import { CleanupService } from "./cleanup-service.js";
 import { validateRepoPath } from "./path-sandbox.js";
 import { OperationsPolicy } from "./operations-policy.js";
 import { SecretScanner } from "./secret-scanner.js";
-
-const execFileAsync = promisify(execFile);
-const ALLOWED_ENV_TEMPLATE_PATHS = new Set([
-  ".env.example",
-  ".env.sample",
-  ".env.template",
-  "example.env"
-]);
+import { DelegationGateService } from "./delegation-gate-service.js";
+import { GitService } from "./git-service.js";
+import { IntegrationReviewService } from "./integration-review-service.js";
+import { PathSandbox } from "./path-sandbox.js";
+import { runGitBounded } from "./git-exec.js";
+import {
+  assertExistingParentWithinRoot,
+  assertNoDuplicateDeletionPaths,
+  assertRealPathWithinRoot,
+  gitOperationEnv,
+  isAllowedEnvTemplatePath,
+  isGeneratedOrDependencyPath,
+  isHardSecretPath,
+  samePathSet
+} from "./git-operation-safety.js";
 
 type StageInput = {
+  repo_id?: string;
   paths: string[];
   expected_head_sha: string;
   dry_run?: boolean;
@@ -33,6 +40,7 @@ type StageInput = {
 type RestorePathsInput = StageInput;
 
 type CommitInput = {
+  repo_id?: string;
   message: string;
   expected_head_sha: string;
   expected_staged_paths: string[];
@@ -40,7 +48,9 @@ type CommitInput = {
 };
 
 type StageCommitInput = {
-  paths: string[];
+  repo_id?: string;
+  paths?: string[];
+  review_pathset_id?: string;
   message: string;
   expected_head_sha: string;
   dry_run?: boolean;
@@ -51,18 +61,35 @@ type RecoverInput = {
   unstage_paths?: string[];
   restore_paths?: string[];
   cleanup_paths?: string[];
+  discard_paths?: string[];
   dry_run?: boolean;
 };
 
 export class GitOperationsService {
   private readonly secretScanner = new SecretScanner();
 
-  constructor(private readonly root: string, private readonly policy: OperationsPolicy) {}
+  constructor(
+    private readonly root: string,
+    private readonly policy: OperationsPolicy,
+    private readonly delegationGate: DelegationGateService = new DelegationGateService(root)
+  ) {}
+
+  async validateReviewBoundPaths(paths: string[]): Promise<string[]> {
+    this.policy.assertReviewBoundStageCommitAllowed(paths);
+    return this.validateExplicitPaths(paths);
+  }
 
   async stage(input: StageInput): Promise<GitStageResult> {
     this.policy.assertStageAllowed(input.paths);
     const headSha = await this.assertExpectedHead(input.expected_head_sha);
     const paths = await this.validateExplicitPaths(input.paths);
+    const gate = await this.delegationGate.assertAllowed({
+      repo_id: input.repo_id ?? "unknown",
+      paths,
+      operation: "stage",
+      head_sha: headSha,
+      review_state_fingerprint: await new GitService(this.root).reviewStateFingerprint()
+    });
 
     if (!input.dry_run) {
       await this.git(["add", "--", ...paths]);
@@ -73,7 +100,7 @@ export class GitOperationsService {
       head_sha: headSha,
       staged_paths: paths,
       skipped: [],
-      warnings: []
+      warnings: gate.warnings
     };
   }
 
@@ -128,6 +155,13 @@ export class GitOperationsService {
         diagnostics: { actual_paths: actualPaths, expected_paths: expectedPaths }
       });
     }
+    const gate = await this.delegationGate.assertAllowed({
+      repo_id: input.repo_id ?? "unknown",
+      paths: actualPaths,
+      operation: "commit",
+      head_sha: headBefore,
+      review_state_fingerprint: await new GitService(this.root).reviewStateFingerprint()
+    });
 
     if (input.dry_run) {
       return {
@@ -135,7 +169,7 @@ export class GitOperationsService {
         dry_run: true,
         head_before: headBefore,
         committed_paths: actualPaths,
-        warnings: []
+        warnings: gate.warnings
       };
     }
 
@@ -148,22 +182,43 @@ export class GitOperationsService {
       head_after: headAfter,
       commit_sha: headAfter,
       committed_paths: actualPaths,
-      warnings: []
+      warnings: gate.warnings
     };
   }
 
   async stageCommit(input: StageCommitInput): Promise<GitStageCommitResult> {
-    this.policy.assertStageAllowed(input.paths);
-    this.policy.assertCommitAllowed(input.paths);
     const headBefore = await this.assertExpectedHead(input.expected_head_sha);
     this.validateCommitMessage(input.message);
-    const paths = await this.validateExplicitPaths(input.paths);
+    const integration = input.review_pathset_id
+      ? await new IntegrationReviewService(this.root, new PathSandbox(this.root), this.policy).resolvePathset({
+          repo_id: input.repo_id ?? "unknown",
+          integration_id: input.review_pathset_id,
+          expected_head_sha: headBefore
+        })
+      : undefined;
+    if (integration && integration.commit_message !== input.message) {
+      throw new RepoReaderError("DELEGATION_REVIEW_GATE_BLOCKED", "Commit message does not match the integration review.");
+    }
+    const requestedPaths = integration?.reviewed_paths ?? input.paths ?? [];
+    if (integration) this.policy.assertReviewBoundStageCommitAllowed(requestedPaths);
+    else {
+      this.policy.assertStageAllowed(requestedPaths);
+      this.policy.assertCommitAllowed(requestedPaths);
+    }
+    const paths = await this.validateExplicitPaths(requestedPaths);
     const preStagedPaths = await this.stagedPaths();
     if (preStagedPaths.length > 0 && !samePathSet(preStagedPaths, paths)) {
       throw new RepoReaderError("GIT_STAGED_PATHS_MISMATCH", "Actual staged paths do not match requested stage-and-commit paths.", {
         diagnostics: { actual_paths: preStagedPaths, expected_paths: paths }
       });
     }
+    const preGate = await this.delegationGate.assertAllowed({
+      repo_id: input.repo_id ?? "unknown",
+      paths,
+      operation: "stage_commit",
+      head_sha: headBefore,
+      review_state_fingerprint: await new GitService(this.root).reviewStateFingerprint()
+    });
 
     if (input.dry_run) {
       return {
@@ -172,20 +227,46 @@ export class GitOperationsService {
         head_before: headBefore,
         staged_paths: paths,
         committed_paths: paths,
-        warnings: []
+        warnings: preGate.warnings
       };
     }
 
     await this.git(["add", "--", ...paths]);
+    if (integration) {
+      await new IntegrationReviewService(this.root, new PathSandbox(this.root), this.policy).resolvePathset({
+        repo_id: input.repo_id ?? "unknown",
+        integration_id: integration.integration_id,
+        expected_head_sha: headBefore
+      });
+    }
     const actualPaths = await this.stagedPaths();
     await this.validateExplicitPaths(actualPaths);
     if (actualPaths.length === 0) {
       throw new RepoReaderError("GIT_NOTHING_STAGED", "No staged changes are available to commit.");
     }
     if (!samePathSet(actualPaths, paths)) {
+      if (preStagedPaths.length === 0) {
+        await this.git(["restore", "--staged", "--", ...actualPaths]).catch(() => undefined);
+      }
       throw new RepoReaderError("GIT_STAGED_PATHS_MISMATCH", "Actual staged paths do not match requested stage-and-commit paths.", {
         diagnostics: { actual_paths: actualPaths, expected_paths: paths }
       });
+    }
+
+    let postGate;
+    try {
+      postGate = await this.delegationGate.assertAllowed({
+        repo_id: input.repo_id ?? "unknown",
+        paths: actualPaths,
+        operation: "stage_commit",
+        head_sha: headBefore,
+        review_state_fingerprint: await new GitService(this.root).reviewStateFingerprint()
+      });
+    } catch (error) {
+      if (preStagedPaths.length === 0) {
+        await this.git(["restore", "--staged", "--", ...actualPaths]).catch(() => undefined);
+      }
+      throw error;
     }
 
     await this.git(["commit", "-m", input.message]);
@@ -197,11 +278,12 @@ export class GitOperationsService {
       head_before: headBefore,
       head_after: headAfter,
       commit_sha: headAfter,
+      ...(integration ? { review_pathset_id: integration.integration_id } : {}),
       staged_paths: paths,
       committed_paths: actualPaths,
       remaining_changes: status.remaining_changes,
       clean_after: status.clean_after,
-      warnings: []
+      warnings: [...new Set([...preGate.warnings, ...postGate.warnings])]
     };
   }
 
@@ -209,7 +291,8 @@ export class GitOperationsService {
     const unstagePathsInput = input.unstage_paths ?? [];
     const restorePathsInput = input.restore_paths ?? [];
     const cleanupPathsInput = input.cleanup_paths ?? [];
-    if (unstagePathsInput.length === 0 && restorePathsInput.length === 0 && cleanupPathsInput.length === 0) {
+    const discardPathsInput = input.discard_paths ?? [];
+    if (unstagePathsInput.length === 0 && restorePathsInput.length === 0 && cleanupPathsInput.length === 0 && discardPathsInput.length === 0) {
       throw new RepoReaderError("GIT_OPERATION_PATHS_REQUIRED", "At least one explicit recovery path is required.");
     }
 
@@ -223,10 +306,12 @@ export class GitOperationsService {
 
     const unstagePaths = unstagePathsInput.length > 0 ? await this.validateExplicitPaths(unstagePathsInput) : [];
     const restorePaths = restorePathsInput.length > 0 ? await this.validateExplicitPaths(restorePathsInput, { scanEnvTemplateContent: false }) : [];
+    const discardPreview = discardPathsInput.length > 0 ? await this.validateDiscardPaths(discardPathsInput) : [];
     const cleanupService = new CleanupService(this.root, this.policy);
     const cleanupPreview = cleanupPathsInput.length > 0
       ? await cleanupService.cleanup({ paths: cleanupPathsInput, dry_run: true })
       : { deleted: [], skipped: [], warnings: [] };
+    assertNoDuplicateDeletionPaths(cleanupPreview.deleted, discardPreview);
 
     if (!input.dry_run) {
       if (unstagePaths.length > 0) {
@@ -238,6 +323,9 @@ export class GitOperationsService {
       if (cleanupPathsInput.length > 0) {
         await cleanupService.cleanup({ paths: cleanupPathsInput });
       }
+      for (const entry of discardPreview) {
+        await rm(join(this.root, entry.path));
+      }
     }
 
     const status = await this.statusSummary();
@@ -248,6 +336,7 @@ export class GitOperationsService {
       unstaged_paths: unstagePaths,
       restored_paths: restorePaths,
       deleted: cleanupPreview.deleted,
+      discarded: discardPreview,
       skipped: cleanupPreview.skipped,
       remaining_changes: status.remaining_changes,
       clean_after: status.clean_after,
@@ -294,6 +383,30 @@ export class GitOperationsService {
       }
     }
     return normalized;
+  }
+
+  private async validateDiscardPaths(paths: string[]): Promise<Array<{ path: string; type: "file" | "directory" }>> {
+    this.policy.assertRestoreAllowed(paths);
+    const normalized = await this.validateExplicitPaths(paths, { scanEnvTemplateContent: false });
+    const discarded: Array<{ path: string; type: "file" | "directory" }> = [];
+    for (const path of normalized) {
+      if (isGeneratedOrDependencyPath(path)) {
+        throw new RepoReaderError("DISCARD_PATH_NOT_ALLOWED", `Discard path is generated, cached, or dependency-owned: ${path}`);
+      }
+      const tracked = (await this.git(["ls-files", "--", path])).trim();
+      if (tracked.length > 0) {
+        throw new RepoReaderError("DISCARD_TRACKED_PATH_REJECTED", `Discard refuses tracked files: ${path}`);
+      }
+      const stat = await lstat(join(this.root, path));
+      if (stat.isSymbolicLink()) {
+        throw new RepoReaderError("DISCARD_UNSUPPORTED_FILE_TYPE", `Discard refuses symlinks: ${path}`);
+      }
+      if (!stat.isFile()) {
+        throw new RepoReaderError("DISCARD_UNSUPPORTED_FILE_TYPE", `Discard supports regular untracked files only: ${path}`);
+      }
+      discarded.push({ path, type: "file" });
+    }
+    return discarded;
   }
 
   private validateExplicitPath(path: string): string {
@@ -350,87 +463,13 @@ export class GitOperationsService {
   }
 
   private async git(args: string[]): Promise<string> {
-    try {
-      const result = await execFileAsync("git", args, {
-        cwd: this.root,
-        maxBuffer: 1024 * 1024,
-        env: gitEnv()
-      });
-      return result.stdout;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Git operation failed";
-      throw new RepoReaderError("GIT_ERROR", message);
-    }
+    const result = await runGitBounded({
+      root: this.root,
+      args,
+      max_stdout_bytes: 16 * 1024 * 1024,
+      max_stderr_bytes: 256 * 1024,
+      env: gitOperationEnv()
+    });
+    return result.stdout;
   }
-}
-
-function gitEnv(): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH ?? "",
-    ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
-    ...(process.env.XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } : {})
-  };
-}
-
-async function assertExistingParentWithinRoot(root: string, repoPath: string): Promise<void> {
-  let parent = dirname(repoPath);
-  while (parent !== ".") {
-    const absoluteParent = join(root, parent);
-    try {
-      await assertRealPathWithinRoot(root, absoluteParent);
-      return;
-    } catch (error) {
-      if (!isNotFoundError(error)) {
-        throw error;
-      }
-      parent = dirname(parent);
-    }
-  }
-  await assertRealPathWithinRoot(root, root);
-}
-
-async function assertRealPathWithinRoot(root: string, target: string): Promise<void> {
-  const [rootReal, targetReal] = await Promise.all([
-    realpath(root),
-    realpath(target)
-  ]);
-  const rel = relative(resolve(rootReal), resolve(targetReal));
-  if (rel !== "" && (rel.startsWith("..") || rel.includes(`..${sep}`))) {
-    throw new RepoReaderError("SYMLINK_ESCAPE_REJECTED", `Path escapes approved repository: ${target}`);
-  }
-}
-
-function samePathSet(actual: string[], expected: string[]): boolean {
-  return JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-}
-
-function isAllowedEnvTemplatePath(repoPath: string): boolean {
-  return ALLOWED_ENV_TEMPLATE_PATHS.has(repoPath);
-}
-
-function isHardSecretPath(repoPath: string): boolean {
-  const lower = repoPath.toLowerCase();
-  const base = lower.split("/").at(-1) ?? lower;
-  const segments = lower.split("/");
-  return (
-    base === ".env" ||
-    base.startsWith(".env.") ||
-    base.endsWith(".pem") ||
-    base.endsWith(".key") ||
-    base.endsWith(".p12") ||
-    base.endsWith(".pfx") ||
-    base === "id_rsa" ||
-    base === "id_ed25519" ||
-    segments.includes("secrets") ||
-    segments.includes("credentials")
-  );
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
 }

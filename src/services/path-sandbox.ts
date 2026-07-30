@@ -1,6 +1,7 @@
 import { lstat, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { posix } from "node:path";
+import { isInternalAgentArtifact } from "../policies/internal-agent-artifacts.js";
 import { RepoReaderError } from "../runtime/errors.js";
 import { normalizeRepoPath } from "./ignore-engine.js";
 
@@ -14,6 +15,9 @@ export class PathSandbox {
 
   async resolve(repoPath: string): Promise<{ repoPath: string; absolutePath: string; stat: Awaited<ReturnType<typeof lstat>> }> {
     const normalized = validateRepoPath(repoPath);
+    if (isInternalAgentArtifact(normalized)) {
+      throw internalArtifactBlocked();
+    }
     const absolutePath = join(this.root, normalized);
     const [rootReal, targetReal, stat] = await Promise.all([
       realpath(this.root),
@@ -23,6 +27,10 @@ export class PathSandbox {
 
     if (!isWithin(rootReal, targetReal)) {
       throw new RepoReaderError("SYMLINK_ESCAPE_REJECTED", `Path escapes approved repository: ${normalized}`);
+    }
+    const realRepoPath = normalizeRepoPath(relative(rootReal, targetReal));
+    if (isInternalAgentArtifact(realRepoPath)) {
+      throw internalArtifactBlocked();
     }
     if (stat.isBlockDevice() || stat.isCharacterDevice() || stat.isFIFO() || stat.isSocket()) {
       throw new RepoReaderError("UNSUPPORTED_FILE_TYPE", `Unsupported file type: ${normalized}`);
@@ -49,6 +57,10 @@ export class PathSandbox {
 
     return { kind: "normal", path: normalized };
   }
+}
+
+function internalArtifactBlocked(): RepoReaderError {
+  return new RepoReaderError("INTERNAL_ARTIFACT_BLOCKED", "Internal agent runner artifact blocked.");
 }
 
 export function validateRepoPath(repoPath: string): string {

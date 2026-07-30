@@ -6,6 +6,11 @@ ChatGPT cannot call a local `localhost` MCP server directly. GPT Repo MCP suppor
 - manual local server plus your own HTTPS tunnel or reverse proxy
 - advanced OpenAI Secure MCP Tunnel when your workspace supports it
 
+The three bundled connector scripts share one child-process supervisor. Output
+is consistently prefixed, an unexpected MCP or tunnel exit terminates its
+sibling, and Ctrl+C/SIGTERM performs a bounded SIGTERM-to-SIGKILL shutdown
+before the connector exits.
+
 ## ngrok prerequisites
 
 The built-in quickstart uses the ngrok Agent CLI. If ngrok is not installed yet:
@@ -39,7 +44,7 @@ Then expose local port `8787` with your preferred HTTPS tunnel or reverse proxy.
 
 ngrok example: `ngrok http 8787`.
 
-Cloudflare Tunnel example: `cloudflared tunnel --url http://localhost:8787`.
+Cloudflare Tunnel example: `cloudflared tunnel --url http://127.0.0.1:8787`.
 
 Use this ChatGPT connector URL shape:
 
@@ -47,7 +52,13 @@ Use this ChatGPT connector URL shape:
 https://<public-host>/t/<that-token>/mcp
 ```
 
-If you only need the local MCP server without a tunnel, run `npm run mcp`. It starts only the local server on localhost. It does not create a public path token or start a tunnel.
+If you only need the local MCP server without a tunnel, run `npm run mcp`. It starts only the local server on `127.0.0.1`. It does not create a public path token or start a tunnel.
+
+The server binds to `127.0.0.1` by default. Local ngrok, Cloudflare, and Secure
+MCP Tunnel clients should connect to that loopback address. A direct external
+bind requires both an explicit `GPT_REPO_HOST` and
+`GPT_REPO_ALLOW_EXTERNAL_BIND=true`; use that escape hatch only behind a
+network boundary you control.
 
 ## Advanced: OpenAI Secure MCP Tunnel
 
@@ -60,9 +71,18 @@ CONTROL_PLANE_API_KEY=
 TUNNEL_CLIENT_BIN=/path/to/tunnel-client
 TUNNEL_CLIENT_PROFILE=gpt-repo-local
 GPT_REPO_CONFIG=./config.local.json
+GPT_REPO_HOST=127.0.0.1
 PORT=8787
 GPT_REPO_LOG_FORMAT=pretty
+GPT_REPO_MAX_SESSIONS=100
+GPT_REPO_SESSION_IDLE_TTL_MS=1800000
 ```
+
+The main server keeps at most 100 concurrent MCP sessions by default and
+closes sessions after 30 minutes without a request. `GPT_REPO_MAX_SESSIONS`
+accepts 1–1000 and `GPT_REPO_SESSION_IDLE_TTL_MS` accepts 1000–86400000.
+DELETE closes the selected transport, and graceful process shutdown closes all
+remaining transports.
 
 `TUNNEL_CLIENT_PROFILE=gpt-repo-local` is an example local `tunnel-client` profile label. It is not a `repo_id`, GitHub repo, ChatGPT connector name, ngrok tunnel, or MCP server name. Create or configure a local `tunnel-client` profile with that name, or replace the value with your own configured profile name.
 

@@ -4,8 +4,9 @@ This project is a closed-world MCP server for approved local repositories. Quali
 
 ## Architecture Invariants
 
-- Tool flow stays `contracts -> toolContracts -> catalog -> define-tool -> handlers -> services`.
-- `src/tools/catalog.ts` remains metadata-only: no inline Zod schemas and no policy logic.
+- Tool flow stays `contracts -> toolContracts -> package definitions -> registry -> define-tool -> package handlers -> services`.
+- `src/tools/catalog.ts` remains a thin compatibility re-export of the registry:
+  no definitions, inline Zod schemas, or policy logic.
 - Handlers stay thin: resolve context, create services, call services, return envelopes.
 - Filesystem access stays behind the existing sandbox, ignore, classifier, reader, writer, and policy services.
 - Mutating behavior stays separate from read services.
@@ -15,8 +16,9 @@ This project is a closed-world MCP server for approved local repositories. Quali
 - Every tool has one central input contract and one central output contract in `src/tools/contracts.ts`.
 - Contracts use Zod objects and include field descriptions for public MCP usability.
 - Output schemas describe successful `structuredContent`; errors use the shared MCP error envelope.
-- Tool names, descriptions, annotations, and handlers are registered through the catalog.
-- Tests must prove catalog entries use the central contract objects.
+- Tool names, descriptions, annotations, and handlers are defined once in
+  `src/tools/packages/*` and composed through the registry.
+- Tests must prove registry entries use the central contract objects.
 
 ## MCP Surface Rules
 
@@ -47,7 +49,7 @@ npm run typecheck
 npm test -- tests/tool-contracts.test.ts tests/mcp-contract.test.ts
 npm run lint
 npm run check:public
-npm run build
+npm run verify:dist
 git diff --check
 ```
 
@@ -60,14 +62,19 @@ npm test -- tests/file-writer.test.ts tests/git-operations-service.test.ts tests
 ## Release Readiness Checklist
 
 - README describes the current tool surface and disabled-by-default mutating tools.
-- `docs/SECURITY.md`, `docs/TOOL_SURFACE.md`, `docs/WRITE_WORKFLOWS.md`, and this file are current.
+- `docs/SECURITY.md`, `docs/TOOL_SURFACE.md`,
+  `docs/DELEGATION_ARTIFACTS.md`, `docs/WRITE_WORKFLOWS.md`, and this file are
+  current.
 - `docs/ERRORS.md` lists stable error codes.
 - CI must pass before merge.
 - Contract tests must run when the tool surface, annotations, or schemas change.
 - Mutating tool schema descriptions must remain covered by tests.
 - Public hygiene checks must pass before release.
+- The built `dist/server.js` runtime smoke must pass before release.
 - MCP contract tests pass and snapshots match intentional tool surface changes.
 - No private local paths, personal workflow instructions, tokens, or recorder guidance are present in public docs.
+- Public documents do not link to internal roadmaps, dated specifications, or
+  source-only runtime documentation.
 - `package.json` metadata is accurate and `package-lock.json` is unchanged unless dependencies changed intentionally.
 
 ## How To Add A Tool
@@ -75,11 +82,11 @@ npm test -- tests/file-writer.test.ts tests/git-operations-service.test.ts tests
 1. Add input and output contracts under `src/contracts/*`.
 2. Add the tool to `src/tools/contracts.ts`.
 3. Add a concise description in `src/tools/descriptions.ts`.
-4. Add metadata and handler wiring in `src/tools/catalog.ts`.
-5. Add a thin adapter in `src/tools/handlers.ts`.
+4. Add metadata and handler wiring in the matching `src/tools/packages/*` module.
+5. Add a thin adapter in the matching `src/tools/handlers/*` module.
 6. Put real logic in `src/services/*`.
 7. Add service tests when behavior is non-trivial.
-8. Update MCP contract tests, tool contract discipline tests, and docs.
+8. Update MCP contract tests, registry discipline tests, and docs.
 
 ## How To Add A Mutating Tool
 

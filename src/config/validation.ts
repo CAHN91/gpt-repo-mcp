@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
+import { isNotFoundError } from "../runtime/fs-helpers.js";
 import { RepoReaderConfigSchema, type RepoReaderConfig } from "./schema.js";
 
 export type ConfigIssue = {
@@ -8,9 +9,15 @@ export type ConfigIssue = {
   message: string;
 };
 
+export type ConfigWarning = {
+  code: string;
+  message: string;
+};
+
 export async function validateConfigDocument(document: unknown): Promise<{
   config?: RepoReaderConfig;
   issues: ConfigIssue[];
+  warnings: ConfigWarning[];
 }> {
   const parsed = RepoReaderConfigSchema.safeParse(document);
   if (!parsed.success) {
@@ -18,12 +25,15 @@ export async function validateConfigDocument(document: unknown): Promise<{
       issues: parsed.error.issues.map((issue) => ({
         code: "SCHEMA_INVALID",
         message: `${formatPath(issue.path)}: ${issue.message}`
-      }))
+      })),
+      warnings: []
     };
   }
 
   const config = parsed.data;
+  const rawRepos = getRawRepos(document);
   const issues: ConfigIssue[] = [];
+  const warnings: ConfigWarning[] = [];
 
   const seenIds = new Set<string>();
   for (const repo of config.repos) {
@@ -38,7 +48,7 @@ export async function validateConfigDocument(document: unknown): Promise<{
   }
 
   const seenRoots = new Map<string, string>();
-  for (const repo of config.repos) {
+  for (const [index, repo] of config.repos.entries()) {
     const rootPath = resolve(repo.root);
     let stats: Awaited<ReturnType<typeof stat>>;
     try {
@@ -92,9 +102,66 @@ export async function validateConfigDocument(document: unknown): Promise<{
         });
       }
     }
+
+    const rawOperations = getRawOperations(rawRepos[index]);
+    if (isShipLikeWithoutValidation(rawOperations)) {
+      const explicitlyDisabled = hasOwn(rawOperations, "validation_enabled");
+      warnings.push({
+        code: "VALIDATION_NOT_ENABLED",
+        message: explicitlyDisabled
+          ? `Repo "${repo.repo_id}" explicitly disables validation for ship-like local operations. Runtime config preserves this opt-out.`
+          : `Repo "${repo.repo_id}" uses legacy ship-like local operations with operations.validation_enabled omitted. Runtime config enables validation for this legacy shape; add validation_enabled explicitly to silence this warning.`
+      });
+    }
+    if (isShipLikeWithoutFocusedValidation(repo.operations)) {
+      warnings.push({
+        code: "SHIP_VALIDATION_TEST_PATHS_NOT_CONFIGURED",
+        message: `Repo "${repo.repo_id}" enables ship-like local operations without operations.validation_test_path_globs. Add focused test path globs for trusted ship-mode repos.`
+      });
+    }
   }
 
-  return { config, issues };
+  return { config, issues, warnings };
+}
+
+function isShipLikeWithoutValidation(operations: RepoReaderConfig["repos"][number]["operations"]): boolean {
+  return Boolean(
+    operations?.enabled
+      && operations.git_stage_enabled
+      && operations.git_commit_enabled
+      && operations.cleanup_enabled
+      && !operations.validation_enabled
+  );
+}
+
+function getRawRepos(document: unknown): unknown[] {
+  if (!document || typeof document !== "object" || !("repos" in document)) {
+    return [];
+  }
+  const repos = (document as { repos?: unknown }).repos;
+  return Array.isArray(repos) ? repos : [];
+}
+
+function getRawOperations(repo: unknown): RepoReaderConfig["repos"][number]["operations"] {
+  if (!repo || typeof repo !== "object" || !("operations" in repo)) {
+    return undefined;
+  }
+  return (repo as { operations?: RepoReaderConfig["repos"][number]["operations"] }).operations;
+}
+
+function hasOwn(value: unknown, key: string): boolean {
+  return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isShipLikeWithoutFocusedValidation(operations: RepoReaderConfig["repos"][number]["operations"]): boolean {
+  return Boolean(
+    operations?.enabled
+      && operations.git_stage_enabled
+      && operations.git_commit_enabled
+      && operations.cleanup_enabled
+      && operations.validation_enabled
+      && (operations.validation_test_path_globs?.length ?? 0) === 0
+  );
 }
 
 async function looksLikeGitRepository(root: string): Promise<boolean> {
@@ -107,15 +174,6 @@ async function looksLikeGitRepository(root: string): Promise<boolean> {
     }
     throw error;
   }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
 }
 
 function formatPath(path: PropertyKey[]): string {

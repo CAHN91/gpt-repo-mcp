@@ -1,5 +1,8 @@
+import { lstat, readFile, rmdir, unlink } from "node:fs/promises";
+import { join, posix } from "node:path";
 import type { WriteChange, WriteChangesInput, WriteChangesResult, WriteSimpleChange } from "../contracts/write.contract.js";
 import { RepoReaderError } from "../runtime/errors.js";
+import { atomicWriteFile, isNotFoundError } from "../runtime/fs-helpers.js";
 import { FileWriter } from "./file-writer.js";
 import { PathSandbox, validateRepoPath } from "./path-sandbox.js";
 import { WritePolicy } from "./write-policy.js";
@@ -8,16 +11,28 @@ const MAX_CHANGES_PER_PACK = 25;
 const MAX_TOTAL_CHANGE_CONTENT_BYTES = 5 * 1024 * 1024;
 const NEXT_STEPS = [
   "Run repo_git_review to inspect the resulting diff.",
-  "If the edit pack is wrong, use git recovery/restore workflow before committing.",
-  "If the diff is good, use repo_write_stage and repo_write_commit."
+  "If the edit pack is wrong, use the repo_write_recover payload returned by repo_git_review.",
+  "If the diff is good, use the repo_write_stage_commit payload returned by repo_git_review."
 ];
 const PARTIAL_FAILURE_RECOVERY_HINT =
-  "Run repo_git_review, then use repo_git_restore_paths for tracked applied paths or repo_cleanup_paths for generated untracked artifacts.";
+  "Run repo_git_review and use its repo_write_recover payload for the paths whose rollback failed.";
+
+type TargetSnapshot = {
+  path: string;
+  absolutePath: string;
+  existed: boolean;
+  oldContent?: Buffer;
+  missingParentPaths: string[];
+};
 
 export class WriteChangesService {
   private readonly writer: FileWriter;
 
-  constructor(root: string, sandbox: PathSandbox, policy: WritePolicy) {
+  constructor(
+    private readonly root: string,
+    private readonly sandbox: PathSandbox,
+    policy: WritePolicy
+  ) {
     this.writer = new FileWriter(root, sandbox, policy);
   }
 
@@ -30,30 +45,36 @@ export class WriteChangesService {
     }
     assertUniqueTargetPaths(input.changes);
 
-    const dryRun = input.dry_run ?? false;
-    const appliedPaths: string[] = [];
-    const files: WriteChangesResult["files"] = [];
-
+    const previewFiles: WriteChangesResult["files"] = [];
     for (const change of input.changes) {
-      try {
-        const result = change.type === "edit"
-          ? await this.writer.writeGroupedEdit({ path: change.path, edits: change.edits, dry_run: dryRun })
-          : await this.writer.write(toWriteFileInput(change, dryRun));
-        files.push({
-          path: result.path,
-          type: result.action,
-          changed: result.changed,
-          created: result.created,
-          bytes_written: result.bytes_written,
-          ...(result.old_sha256 ? { old_sha256: result.old_sha256 } : {}),
-          ...(result.new_sha256 ? { new_sha256: result.new_sha256 } : {}),
-          summary: result.summary
-        });
-        if (result.changed) {
-          appliedPaths.push(result.path);
+      const result = await this.applyChange(change, true);
+      previewFiles.push(toFileResult(result));
+    }
+
+    const dryRun = input.dry_run ?? false;
+    const files: WriteChangesResult["files"] = [];
+    const appliedPaths: string[] = [];
+    if (dryRun) {
+      files.push(...previewFiles);
+      appliedPaths.push(...previewFiles.filter((file) => file.changed).map((file) => file.path));
+    } else {
+      const snapshots = new Map<string, TargetSnapshot>();
+      for (const change of input.changes) {
+        const snapshot = await this.captureSnapshot(change.path);
+        snapshots.set(snapshot.path, snapshot);
+      }
+
+      for (const [index, change] of input.changes.entries()) {
+        try {
+          const result = await this.applyChange(change, false, previewFiles[index]);
+          files.push(toFileResult(result));
+          if (result.changed) {
+            appliedPaths.push(result.path);
+          }
+        } catch (error) {
+          const rollback = await rollbackAppliedPaths(this.root, snapshots, appliedPaths);
+          throw atomicFailure(error, rollback, change.path);
         }
-      } catch (error) {
-        throw addPartialFailureDiagnostics(error, appliedPaths, change.path);
       }
     }
 
@@ -78,17 +99,79 @@ export class WriteChangesService {
       next_steps: NEXT_STEPS
     };
   }
+
+  private applyChange(
+    change: WriteChange,
+    dryRun: boolean,
+    preview?: WriteChangesResult["files"][number]
+  ) {
+    const transactionGuard = preview
+      ? preview.created
+        ? { expected_missing: true }
+        : { expected_old_sha256: preview.old_sha256 }
+      : {};
+    return change.type === "edit"
+      ? this.writer.writeGroupedEdit({
+          path: change.path,
+          edits: change.edits,
+          dry_run: dryRun,
+          ...transactionGuard
+        })
+      : this.writer.write(toWriteFileInput(change, dryRun, transactionGuard));
+  }
+
+  private async captureSnapshot(path: string): Promise<TargetSnapshot> {
+    const repoPath = validateRepoPath(path);
+    try {
+      const resolved = await this.sandbox.resolve(repoPath);
+      return {
+        path: repoPath,
+        absolutePath: resolved.absolutePath,
+        existed: true,
+        oldContent: await readFile(resolved.absolutePath),
+        missingParentPaths: []
+      };
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+    }
+    return {
+      path: repoPath,
+      absolutePath: join(this.root, repoPath),
+      existed: false,
+      missingParentPaths: await findMissingParentPaths(this.root, repoPath)
+    };
+  }
 }
 
-function toWriteFileInput(change: WriteSimpleChange, dryRun: boolean) {
+function toFileResult(result: Awaited<ReturnType<FileWriter["write"]>> | Awaited<ReturnType<FileWriter["writeGroupedEdit"]>>) {
+  return {
+    path: result.path,
+    type: result.action,
+    changed: result.changed,
+    created: result.created,
+    bytes_written: result.bytes_written,
+    ...(result.old_sha256 ? { old_sha256: result.old_sha256 } : {}),
+    ...(result.new_sha256 ? { new_sha256: result.new_sha256 } : {}),
+    summary: result.summary
+  };
+}
+
+function toWriteFileInput(
+  change: WriteSimpleChange,
+  dryRun: boolean,
+  transactionGuard: { expected_old_sha256?: string; expected_missing?: boolean } = {}
+) {
   return {
     path: change.path,
     action: change.type,
     ...(typeof change.content === "string" ? { content: change.content } : {}),
     ...(typeof change.find === "string" ? { find: change.find } : {}),
     ...(typeof change.replace === "string" ? { replace: change.replace } : {}),
+    ...(typeof change.expected_old_sha256 === "string" ? { expected_old_sha256: change.expected_old_sha256 } : {}),
+    ...(typeof change.expected_missing === "boolean" ? { expected_missing: change.expected_missing } : {}),
     create_dirs: change.type === "write" ? true : undefined,
-    dry_run: dryRun
+    dry_run: dryRun,
+    ...transactionGuard
   };
 }
 
@@ -130,17 +213,94 @@ function summarize(requested: number, changed: number, changedPathCount: number,
   return `${verb} ${changed} ${changed === 1 ? "change" : "changes"} across ${changedPathCount} ${changedPathCount === 1 ? "file" : "files"}.`;
 }
 
-function addPartialFailureDiagnostics(error: unknown, appliedPaths: string[], failedPath: string): unknown {
-  if (!(error instanceof RepoReaderError) || appliedPaths.length === 0) {
-    return error;
+async function findMissingParentPaths(root: string, repoPath: string): Promise<string[]> {
+  const parentPath = posix.dirname(repoPath);
+  if (parentPath === ".") return [];
+  const missing: string[] = [];
+  let current = "";
+  for (const segment of parentPath.split("/")) {
+    current = current ? `${current}/${segment}` : segment;
+    try {
+      await lstat(join(root, current));
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+      missing.push(current);
+    }
   }
-  return new RepoReaderError(error.code, error.message, {
-    retryable: error.retryable,
+  return missing;
+}
+
+async function rollbackAppliedPaths(
+  root: string,
+  snapshots: Map<string, TargetSnapshot>,
+  appliedPaths: string[]
+): Promise<{ rolledBackPaths: string[]; failedPaths: string[] }> {
+  const rolledBackPaths: string[] = [];
+  const failedPaths: string[] = [];
+  const snapshotsToRestore = unique(appliedPaths).reverse().map((path) => snapshots.get(path)).filter(
+    (snapshot): snapshot is TargetSnapshot => snapshot !== undefined
+  );
+
+  for (const snapshot of snapshotsToRestore) {
+    try {
+      if (snapshot.existed && snapshot.oldContent) {
+        await atomicWriteFile(snapshot.absolutePath, snapshot.oldContent);
+      } else {
+        await unlink(snapshot.absolutePath);
+      }
+      rolledBackPaths.push(snapshot.path);
+    } catch (error) {
+      if (!snapshot.existed && isNotFoundError(error)) {
+        rolledBackPaths.push(snapshot.path);
+      } else {
+        failedPaths.push(snapshot.path);
+      }
+    }
+  }
+
+  const parentPaths = unique(snapshotsToRestore.flatMap((snapshot) => snapshot.missingParentPaths))
+    .sort((left, right) => right.split("/").length - left.split("/").length);
+  for (const parentPath of parentPaths) {
+    try {
+      await rmdir(join(root, parentPath));
+    } catch {
+      // A non-empty or concurrently created directory is left intact.
+    }
+  }
+
+  return { rolledBackPaths: rolledBackPaths.reverse(), failedPaths: failedPaths.reverse() };
+}
+
+function atomicFailure(
+  error: unknown,
+  rollback: { rolledBackPaths: string[]; failedPaths: string[] },
+  failedPath: string
+): RepoReaderError {
+  const normalizedFailedPath = safeFailedPath(failedPath);
+  if (rollback.failedPaths.length > 0) {
+    return new RepoReaderError("INTERNAL_ERROR", "Atomic edit pack failed and rollback was incomplete.", {
+      diagnostics: {
+        applied_paths: rollback.failedPaths,
+        rolled_back_paths: rollback.rolledBackPaths,
+        ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {}),
+        recovery_hint: PARTIAL_FAILURE_RECOVERY_HINT
+      }
+    });
+  }
+  if (error instanceof RepoReaderError) {
+    return new RepoReaderError(error.code, error.message, {
+      retryable: error.retryable,
+      diagnostics: {
+        ...error.diagnostics,
+        rolled_back_paths: rollback.rolledBackPaths,
+        ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {})
+      }
+    });
+  }
+  return new RepoReaderError("INTERNAL_ERROR", "Atomic edit pack failed and was rolled back.", {
     diagnostics: {
-      ...error.diagnostics,
-      applied_paths: unique(appliedPaths),
-      ...(safeFailedPath(failedPath) ? { failed_path: safeFailedPath(failedPath) } : {}),
-      recovery_hint: PARTIAL_FAILURE_RECOVERY_HINT
+      rolled_back_paths: rollback.rolledBackPaths,
+      ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {})
     }
   });
 }

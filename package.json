@@ -1,6 +1,6 @@
 {
   "name": "gpt-repo-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -33,37 +33,40 @@
     "mcp": "GPT_REPO_CONFIG=./config.local.json PORT=8787 npm run dev",
     "tunnel": "ngrok http 8787 --log=stdout",
     "connect": "node scripts/connect-dev.mjs",
+    "connect:cloudflare": "PORT=8788 node scripts/connect-cloudflare.mjs",
     "connect:secure": "node scripts/connect-secure.mjs",
     "add": "node dist/cli/connect-gpt.js add",
     "remove": "node dist/cli/connect-gpt.js remove",
     "list": "node dist/cli/connect-gpt.js list",
     "check:config": "node dist/cli/connect-gpt.js check",
     "doctor": "npm run build && node dist/cli/connect-gpt.js doctor",
-    "build": "tsup src/server.ts --format esm --dts --clean && tsup src/cli/connect-gpt.ts --format esm --out-dir dist/cli",
+    "build": "tsup src/server.ts --format esm --dts --clean --external typescript && tsup src/cli/connect-gpt.ts --format esm --out-dir dist/cli --external typescript",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check:public": "node scripts/check-public.mjs",
-    "test": "vitest run"
+    "security:scan": "node scripts/oss-security-scan.mjs",
+    "test": "vitest run",
+    "verify:dist": "npm run build && node scripts/smoke-dist-server.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
     "ignore": "^7.0.5",
+    "typescript": "^5.9.3",
     "zod": "^4.1.12"
-  },
-  "overrides": {
-    "esbuild": "0.28.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.1",
     "eslint": "^9.39.1",
-    "tsx": "^4.20.6",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
+    "tsx": "^4.20.6",
     "typescript-eslint": "^8.48.0",
     "vitest": "^4.0.14"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.12"
   }
 }

@@ -35,6 +35,7 @@ pnpm-debug.log*
 !.env.example
 config.local.json
 *.local.json
+*.local.json.*
 
 # Test artifacts
 playwright-report/
