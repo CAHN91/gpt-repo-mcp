@@ -23,6 +23,41 @@ This project is not affiliated with OpenAI, ChatGPT, Anthropic, or the Model Con
 - Keep ChatGPT work organized with local session handoff notes for future ChatGPT chats.
 - Ask why a path is blocked with `repo_policy_explain`.
 
+## How ChatGPT Works With Your Repo
+
+You describe the outcome you want. GPT Repo MCP gives ChatGPT a guided,
+controlled path from understanding the repository to producing a reviewed
+local result:
+
+```text
+Understand -> Edit -> Validate -> Review -> Local commit
+```
+
+| You ask ChatGPT to... | ChatGPT can... | GPT Repo MCP keeps control by... |
+| --- | --- | --- |
+| Understand a project | Map structure, search code, read relevant files, and identify dependencies | Limiting access to approved repositories and bounded reads |
+| Build or change something | Plan the work and edit one or many files as a cohesive change | Enforcing write policy, path safety, size limits, stale-state guards, and secret checks |
+| Fix a failure | Run approved tests, builds, linting, type checks, or smoke checks and interpret the result | Allowing configured validation profiles instead of arbitrary shell commands |
+| Review existing work | Inspect the real Git diff, identify risks, and decide what still needs attention | Using repository state and current file bytes instead of trusting claims |
+| Prepare the result | Validate, review, stage, recover, or create a local commit when authorized | Rechecking exact paths, HEAD, review evidence, and host approval before mutation |
+| Continue later | Preserve local progress, decisions, risks, and next steps | Keeping continuity artifacts local and content-bounded |
+| Coordinate another agent | Prepare and review structured Codex or Claude tasks | Keeping task creation separate from runner execution, commit, push, and deployment |
+
+When the connector starts, ChatGPT receives workflow instructions, tool
+descriptions, input schemas, safety annotations, and structured tool results.
+Those signals help it choose a workflow that fits the request: a question may
+need only search and reading, while an implementation may continue through
+multi-file editing, validation, review, and local commit preparation.
+
+ChatGPT chooses which capability to use, but it does not enforce the security
+boundary. The server independently checks repository access, permissions,
+paths, secrets, validation profiles, stale state, and allowed local Git
+operations. It never adds arbitrary shell access, automatic push, or automatic
+deployment.
+
+See [Capability guide](docs/CAPABILITIES.md) for the user-oriented workflows
+and [Tool surface](docs/TOOL_SURFACE.md) for exact tool schemas and outputs.
+
 ## Canonical Development Workflow
 
 1. Read `repo_project_brief` when product or repository context is needed, or `repo_current_work_session` when resuming. Active and blocked continuity includes the full session; completed current-pointer history is compact and requires an explicit `work_session_id` lookup for full details.
@@ -253,6 +288,7 @@ refreshing the connector.
 - [Changelog](CHANGELOG.md)
 - [Migrating from 0.1.x](docs/MIGRATION.md)
 - [Product and UX contract](docs/PRODUCT.md)
+- [Capability guide](docs/CAPABILITIES.md)
 - [Current and compatibility terminology](docs/GLOSSARY.md)
 - [Setup](docs/SETUP.md)
 - [ChatGPT connector steps](docs/CHATGPT_CONNECT.md)

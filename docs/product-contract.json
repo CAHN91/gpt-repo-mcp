@@ -67,6 +67,7 @@
   ],
   "canonical_docs": [
     "README.md",
+    "docs/CAPABILITIES.md",
     "docs/PRODUCT.md",
     "docs/ARCHITECTURE.md",
     "docs/DELEGATION_ARTIFACTS.md",

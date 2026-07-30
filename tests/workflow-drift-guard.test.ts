@@ -14,6 +14,7 @@ const ACTIVE_WORKFLOW_DOCS = [
   "README.md",
   "docs/APPROVAL_TROUBLESHOOTING.md",
   "docs/ARCHITECTURE.md",
+  "docs/CAPABILITIES.md",
   "docs/DELEGATION_ARTIFACTS.md",
   "docs/PRODUCT.md",
   "docs/SECURITY.md",
