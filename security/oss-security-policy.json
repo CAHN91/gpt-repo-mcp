@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_version": "2026-07-30.3",
+  "policy_version": "2026-07-31.1",
   "gitleaks": {
     "version": "8.30.1",
     "release_url": "https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1",
@@ -37,6 +37,14 @@
       "noreply@github.com"
     ],
     "reviewed_public_history_locations": [
+      {
+        "commit": "45242578cfc715939ff023544a2c18622cfc28a8",
+        "roles": [
+          "author",
+          "committer"
+        ],
+        "context": "existing public pull-request provenance"
+      },
       {
         "commit": "e2d93a8e54726373b9c795c6836c5a99d4aeba8f",
         "roles": [
