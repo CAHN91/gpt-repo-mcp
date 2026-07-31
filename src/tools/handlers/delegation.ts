@@ -36,7 +36,7 @@ export const writeCodexTaskHandler: ToolHandler = async (input, context) => safe
 export const agentRunsHandler: ToolHandler = async (input, context) => safeTool<AgentRunsInput>("repo_agent_runs", input, async (args) => {
   const repo = context.registry.get(args.repo_id);
   const result = await new AgentRunsService(repo.root, new PathSandbox(repo.root), {
-    repository_max_runtime_ms: repo.agent_runner?.max_runtime_ms ?? DEFAULT_AGENT_RUNNER_MAX_RUNTIME_MS
+    repository_max_runtime_ms: DEFAULT_AGENT_RUNNER_MAX_RUNTIME_MS
   }).read(args);
   audit({ tool: "repo_agent_runs", repo_id: args.repo_id, counts: { matched: result.matched_count, returned: result.returned_count }, truncated: result.truncated, warnings: result.warnings });
   return createSuccessEnvelope(result, result.mode === "detail" ? `Read agent run ${result.run?.run_id}.` : `Returned ${result.returned_count} agent runs.`, { warnings: result.warnings, truncated: result.truncated });
@@ -45,7 +45,7 @@ export const agentRunsHandler: ToolHandler = async (input, context) => safeTool<
 export const writeAgentReplyHandler: ToolHandler = async (input, context) => safeTool<AgentReplyInput>("repo_write_agent_reply", input, async (args) => {
   const repo = context.registry.get(args.repo_id);
   const result = await new AgentReplyService(repo.root, new PathSandbox(repo.root), {
-    repository_max_runtime_ms: repo.agent_runner?.max_runtime_ms ?? DEFAULT_AGENT_RUNNER_MAX_RUNTIME_MS
+    repository_max_runtime_ms: DEFAULT_AGENT_RUNNER_MAX_RUNTIME_MS
   }).write(args);
   audit({ tool: "repo_write_agent_reply", repo_id: args.repo_id, paths: [result.written_path], counts: { answers: args.answers.length }, warnings: result.warnings });
   return createSuccessEnvelope(result, `Wrote structured reply for agent run ${result.run_id}, turn ${result.turn_index}.`);

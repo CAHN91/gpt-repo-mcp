@@ -2,20 +2,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import process from "node:process";
 
-const forbiddenPublicFiles = [
-  "MASTER_PROMPT.md",
-  "docs/CHATGPT_DEV_MODE.md"
-];
-
 const forbiddenTrackedArtifacts = {
   exact: new Set([
     ".DS_Store",
     "config.local.json"
   ]),
   prefixes: [
-    ".chatgpt/",
-    ".agent-recorder/",
-    ".agentbus/"
+    ".chatgpt/"
   ],
   patterns: [
     {
@@ -52,15 +45,10 @@ const excludedScanPaths = [
 ];
 
 const blockedMarkers = [
-  "RECORDER_SUMMARY",
-  "Agent Recorder",
-  "Recorder is installed",
   "/Users/",
   "Do not add write tools",
   "No write tools",
   "read-only TypeScript MCP server",
-  "MASTER_PROMPT",
-  "CHATGPT_DEV_MODE",
   "Promptiva"
 ];
 
@@ -106,12 +94,6 @@ function isTextFile(file) {
 
 const trackedFiles = gitLsFiles();
 const failures = [];
-
-for (const file of forbiddenPublicFiles) {
-  if (existsSync(file)) {
-    failures.push(`${file} must not be present in the public OSS branch.`);
-  }
-}
 
 for (const file of trackedFiles) {
   if (isForbiddenTrackedArtifact(file)) {

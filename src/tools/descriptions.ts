@@ -10,7 +10,7 @@ export const descriptions = {
   repo_context_map: "Use this when mapping file-level impact, imports, dependents, entrypoints, routes, components, or affected tests. Use repo_symbol_context for symbol-level evidence.",
   repo_symbol_context: "Use this when gathering symbol-level evidence for definitions, references, calls, implementations, reverse dependents, or affected tests. Ask before starting an optional index.",
   repo_code_index: "Use this when checking or managing the optional Codebase Memory index. Before action=start, explicitly ask the user; status is safe to inspect without approval.",
-  repo_failure_diagnose: "Use this when failed validation or dev-harness evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
+  repo_failure_diagnose: "Use this when saved validation evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
   repo_semantic_review: "Use this when current changes need standalone evidence-based semantic risk review. Use repo_ship_review for combined final readiness.",
   repo_ship_review: "Use this when combined final readiness across Git, validation, semantic, and delegation gates is needed before ship. Compact is default; detail=full adds granular expert evidence and payloads.",
   repo_git_status: "Use this when checking branch, HEAD, cleanliness, or changed-file status. It does not read file contents.",

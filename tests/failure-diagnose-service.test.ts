@@ -32,24 +32,6 @@ describe("FailureDiagnoseService", () => {
     expect(result.correlations.touched_paths).toContain("src/service.ts");
   });
 
-  test("parses explicit dev-harness pytest evidence without exposing outside absolute paths", async () => {
-    const root = await fixture();
-    await mkdir(join(root, ".chatgpt", "dev-harness", "debug"), { recursive: true });
-    await writeFile(join(root, ".chatgpt", "dev-harness", "debug", "report.json"), JSON.stringify({
-      log: "tests/test_api.py:12: AssertionError: expected 200\n    at outside (/private/secret/app.ts:9:2)"
-    }));
-
-    const result = await service(root).diagnose({
-      repo_id: "fixture",
-      validation_id: "validation-missing",
-      dev_harness_artifacts: [".chatgpt/dev-harness/debug/report.json"]
-    });
-
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({ tool: "pytest", path: "tests/test_api.py", line: 12, source: "dev_harness" }));
-    expect(result.diagnostics.some((diagnostic) => diagnostic.path?.includes("private/secret"))).toBe(false);
-    expect(result.warnings).toContain("FAILURE_VALIDATION_ARTIFACT_MISSING");
-  });
-
   test("does not suggest focused validation when repository policy does not allow test paths", async () => {
     const root = await fixture();
     const result = await new FailureDiagnoseService(root, new PathSandbox(root), new OperationsPolicy({ enabled: true, validation_enabled: true }))

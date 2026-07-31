@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_LIMITS } from "../policies/limits.js";
-import { internalAgentArtifactGitExcludes, isInternalAgentArtifact } from "../policies/internal-agent-artifacts.js";
+import { delegationControlArtifactGitExcludes, isDelegationControlArtifact } from "../policies/delegation-control-artifacts.js";
 import { isNotFoundError } from "../runtime/fs-helpers.js";
 import { validateRepoPath } from "./path-sandbox.js";
 import { runGitBounded } from "./git-exec.js";
@@ -26,10 +26,10 @@ export class GitService {
     const [branch, headSha, porcelain] = await Promise.all([
       this.gitText(["rev-parse", "--abbrev-ref", "HEAD"], SMALL_GIT_LIMIT),
       this.gitText(["rev-parse", "HEAD"], SMALL_GIT_LIMIT),
-      this.gitText(["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ...internalAgentArtifactGitExcludes()], STATUS_LIMIT)
+      this.gitText(["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ...delegationControlArtifactGitExcludes()], STATUS_LIMIT)
     ]);
     const files = porcelain.split("\n").filter(Boolean).map(parseStatusLine)
-      .filter((file) => !isInternalAgentArtifact(file.path) && !isInternalAgentArtifact(file.original_path ?? ""));
+      .filter((file) => !isDelegationControlArtifact(file.path) && !isDelegationControlArtifact(file.original_path ?? ""));
     const counts: Record<string, number> = {};
     for (const file of files) {
       const key = `${file.index}${file.worktree}`.trim() || "clean";
@@ -66,7 +66,7 @@ export class GitService {
       const expandedPaths = await this.expandRenamePaths(selectedPaths);
       args.push("--", ...expandedPaths);
     } else {
-      args.push("--", ".", ...internalAgentArtifactGitExcludes());
+      args.push("--", ".", ...delegationControlArtifactGitExcludes());
     }
     const maxBytes = Math.min(options.max_bytes ?? DEFAULT_LIMITS.max_diff_bytes, DEFAULT_LIMITS.max_diff_bytes);
     const result = await runGitBounded({
@@ -76,7 +76,7 @@ export class GitService {
       allow_stdout_truncation: true
     });
     const files = parseDiff(result.stdout).filter(
-      (file) => !isInternalAgentArtifact(file.path) && !isInternalAgentArtifact(file.original_path ?? "")
+      (file) => !isDelegationControlArtifact(file.path) && !isDelegationControlArtifact(file.original_path ?? "")
     );
     const truncated = fileLimitTruncated || result.stdout_truncated;
     const reasons = [fileLimitTruncated ? "max_files" : undefined, result.stdout_truncated ? "max_bytes" : undefined].filter(Boolean);
@@ -171,9 +171,9 @@ export class GitService {
 
   private async diffPathNames(options: { base?: string; compare?: string; staged?: boolean }): Promise<string[]> {
     const args = this.diffArgs(options, true);
-    args.push("--", ".", ...internalAgentArtifactGitExcludes());
+    args.push("--", ".", ...delegationControlArtifactGitExcludes());
     const text = await this.gitText(args, STATUS_LIMIT);
-    return [...new Set(text.split("\0").filter(Boolean).filter((path) => !isInternalAgentArtifact(path)))].sort((a, b) => a.localeCompare(b));
+    return [...new Set(text.split("\0").filter(Boolean).filter((path) => !isDelegationControlArtifact(path)))].sort((a, b) => a.localeCompare(b));
   }
 
   private diffArgs(options: { base?: string; compare?: string; staged?: boolean; context_lines?: number }, namesOnly: boolean): string[] {

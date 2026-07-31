@@ -48,6 +48,7 @@ specialist capabilities to use only when the task benefits from them.
 
 ## Intentionally not included
 
-The OSS server supports delegation artifacts and review, but it does not ship
-an agent runner, provider adapter, scheduler, or the project development
-harness. External agent execution remains a separate user-owned integration.
+The OSS server supports delegation artifacts and review, but it does not
+execute implementation agents, load provider integrations, schedule external
+work, or ship project-specific development utilities. External execution
+remains a separate user-owned integration.

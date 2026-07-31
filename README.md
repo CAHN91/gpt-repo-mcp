@@ -83,8 +83,8 @@ Several related Delegation v3 runs may intentionally share one dirty worktree. E
 
 The stable public architecture is documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Delegation is a repository-owned
-artifact and review protocol; the public server does not include or start an
-agent runner. See
+artifact and review protocol; the public server does not execute implementation
+agents or manage external processes. See
 [docs/DELEGATION_ARTIFACTS.md](docs/DELEGATION_ARTIFACTS.md) for its persisted
 contracts, privacy boundary, stale-state rules, and multi-run integration flow.
 

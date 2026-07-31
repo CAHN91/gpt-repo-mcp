@@ -16,7 +16,7 @@ GPT Repo MCP (`gpt-repo-mcp`) is a tool-only MCP server. There is no widget in v
 - `src/tools/define-tool.ts` converts registry contract objects to MCP SDK schemas and registers metadata.
 - `src/tools/handlers/*` contains package-scoped thin adapters from tool input to services; `src/tools/handlers.ts` is a compatibility barrel.
 - `src/tools/handler-support.ts` centralizes input parsing, error envelopes, legacy delegation migration guidance, and HEAD guards shared by handlers.
-- `src/delegation/*` contains the public, repository-owned delegation artifact contracts and safe stores. It does not execute or load an agent runner.
+- `src/delegation/*` contains the public, repository-owned delegation artifact contracts and safe stores. It does not execute agents or manage external processes.
 - `src/services/*` contains filesystem, git, search, tree, read, write, project, task, decision, and advisory planning logic.
 - `src/policies/*` contains shared limits, excludes, write defaults, and secret patterns.
 - `src/runtime/*` contains context, structured errors, result envelopes, and audit logging.

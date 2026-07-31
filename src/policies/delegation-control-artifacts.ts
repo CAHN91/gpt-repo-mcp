@@ -13,7 +13,7 @@ const INTERNAL_RUN_FILES = new Set([
 
 const INTERNAL_REPLY_PATTERN = /^interactions\/turn-[0-9]{4}\.reply\.json$/;
 
-export function internalAgentArtifactGitExcludes(): string[] {
+export function delegationControlArtifactGitExcludes(): string[] {
   return [
     ...[...INTERNAL_RUN_FILES].flatMap((file) => [
       `:(exclude,glob)${AGENT_RUN_PREFIX}*/${file}`,
@@ -23,7 +23,7 @@ export function internalAgentArtifactGitExcludes(): string[] {
   ];
 }
 
-export function isInternalAgentArtifact(repoPath: string): boolean {
+export function isDelegationControlArtifact(repoPath: string): boolean {
   const portablePath = repoPath.replaceAll("\\", "/").replace(/^\/+/, "");
   const normalized = posix.normalize(portablePath).replace(/^\.\//, "").toLowerCase();
   if (!normalized.startsWith(AGENT_RUN_PREFIX)) return false;

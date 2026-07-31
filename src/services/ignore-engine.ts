@@ -1,7 +1,7 @@
 import ignore from "ignore";
 import { posix } from "node:path";
 import { DEFAULT_EXCLUDES } from "../policies/default-excludes.js";
-import { isInternalAgentArtifact } from "../policies/internal-agent-artifacts.js";
+import { isDelegationControlArtifact } from "../policies/delegation-control-artifacts.js";
 
 const PUBLIC_ENV_TEMPLATE_PATHS = new Set([".env.example", ".env.sample", ".env.template", "example.env"]);
 
@@ -40,7 +40,7 @@ export class IgnoreEngine {
   }
 
   isInternalArtifact(repoPath: string): boolean {
-    return isInternalAgentArtifact(normalizeRepoPath(repoPath));
+    return isDelegationControlArtifact(normalizeRepoPath(repoPath));
   }
 }
 

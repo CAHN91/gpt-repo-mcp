@@ -981,40 +981,6 @@ describe("tool catalog contracts", () => {
     expect(defaultWrites?.denied_globs).not.toContain("**/*credential*");
   });
 
-  test("repo config schema validates optional agent runner config", () => {
-    const valid = RepoReaderConfigSchema.safeParse({
-      repos: [{
-        repo_id: "fixture",
-        display_name: "Fixture",
-        root: "/tmp/fixture",
-        agent_runner: {
-          enabled: true,
-          allowed_runners: ["opencode_sdk"],
-          stale_lock_ms: 120000
-        }
-      }],
-      limits: {}
-    });
-    expect(valid.success).toBe(true);
-    expect(valid.data?.repos[0]?.agent_runner?.enabled).toBe(true);
-    expect(valid.data?.repos[0]?.agent_runner?.allowed_runners).toEqual(["opencode_sdk"]);
-    expect(valid.data?.repos[0]?.agent_runner?.auto_start_enabled).toBe(false);
-
-    const invalid = RepoReaderConfigSchema.safeParse({
-      repos: [{
-        repo_id: "fixture",
-        display_name: "Fixture",
-        root: "/tmp/fixture",
-        agent_runner: {
-          enabled: true,
-          allowed_runners: ["unknown_runner"]
-        }
-      }],
-      limits: {}
-    });
-    expect(invalid.success).toBe(false);
-  });
-
   test("code intelligence config requires an explicit absolute executable and accepts no command arguments", () => {
     const valid = RepoReaderConfigSchema.safeParse({
       repos: [],
@@ -1501,9 +1467,8 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when failed validation or dev-harness evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
+          "description": "Use this when saved validation evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
           "inputKeys": [
-            "dev_harness_artifacts",
             "max_candidates",
             "max_diagnostics",
             "repo_id",

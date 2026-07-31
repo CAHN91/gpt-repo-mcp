@@ -36,7 +36,7 @@ export class FileReader {
       warnings.push(`Read default-excluded path with override: ${resolved.repoPath}`);
     }
     if (this.ignoreEngine.isInternalArtifact(resolved.repoPath)) {
-      throw new RepoReaderError("INTERNAL_ARTIFACT_BLOCKED", "Internal agent runner artifact blocked.");
+      throw new RepoReaderError("INTERNAL_ARTIFACT_BLOCKED", "Internal delegation control artifact blocked.");
     }
     if (this.ignoreEngine.isSensitiveCandidate(resolved.repoPath)) {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret candidate blocked: ${resolved.repoPath}`);

@@ -1,6 +1,4 @@
-# Local agent artifacts
-.agent-recorder/
-.agentbus/recorder/
+# Local GPT Repo MCP artifacts
 .chatgpt/
 .chatgpt/backups/
 .chatgpt/operations/*.json
@@ -21,15 +19,11 @@ coverage/
 .vite/
 .cache/
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Test artifacts
+test-results/
+playwright-report/
 
-# Local environment and config
+# Environment and local config
 .env
 .env.*
 !.env.example
@@ -37,11 +31,10 @@ config.local.json
 *.local.json
 *.local.json.*
 
-# Test artifacts
-playwright-report/
-test-results/
-
-# Editor and OS files
-.idea/
-.vscode/
+# OS and editor files
 .DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

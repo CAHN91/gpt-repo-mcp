@@ -13,12 +13,12 @@ describe("public hygiene", () => {
       "check-ignore",
       "--no-index",
       "--",
-      "config.local.json.backup-before-flywheel-runner",
+      "config.local.json.backup-before-release",
       "team.local.json.bak"
     ], { cwd: process.cwd() });
 
     expect(stdout.trim().split("\n")).toEqual([
-      "config.local.json.backup-before-flywheel-runner",
+      "config.local.json.backup-before-release",
       "team.local.json.bak"
     ]);
   });

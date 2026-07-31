@@ -5,10 +5,9 @@ review tools. The protocol lets a manual or external implementation agent work
 against a bounded task while the MCP server retains authority over validation,
 review, staging, and local commit preparation.
 
-The OSS distribution does not include or start an agent runner. Writing a task
-with runner mode `queued` records handoff intent only. Execution, scheduling,
-provider credentials, and process supervision remain outside the public MCP
-server.
+Writing a task with runner mode `queued` records handoff intent only. The
+public MCP server does not execute agents, schedule implementation work, load
+provider credentials, or supervise external processes.
 
 ## Canonical Delegation v3 flow
 

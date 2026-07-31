@@ -26,7 +26,7 @@ const ANSWER_CANARY = "private-answer-canary-must-not-leak";
 const REVIEW_CANARY = "private-product-review-canary-must-not-leak";
 const REVIEW_GATE_CANARY = "private-review-gate-canary-must-not-leak";
 
-describe("generic tool privacy for internal agent artifacts", () => {
+describe("generic tool privacy for delegation control artifacts", () => {
   test("blocks missing mixed-case and Windows-separated internal paths before filesystem lookup", async () => {
     const fixture = await createRepoFixture();
     const registry = await RootRegistry.fromConfig({

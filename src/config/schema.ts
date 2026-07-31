@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { isAbsolute } from "node:path";
-import { AgentRunnerConfigSchema } from "../delegation/runner-config.js";
 import { DEFAULT_OPERATIONS_POLICY, SHIP_VALIDATION_TEST_PATH_GLOBS } from "../policies/operations-defaults.js";
 import { DEFAULT_WRITE_POLICY } from "../policies/write-defaults.js";
 
@@ -57,8 +56,7 @@ export const RepoConfigSchema = z.object({
   root: z.string().min(1),
   allow_non_git: z.boolean().optional(),
   writes: WritePolicyConfigSchema.default(DEFAULT_WRITE_POLICY),
-  operations: OperationsPolicyConfigSchema.default(DEFAULT_OPERATIONS_POLICY),
-  agent_runner: AgentRunnerConfigSchema.optional()
+  operations: OperationsPolicyConfigSchema.default(DEFAULT_OPERATIONS_POLICY)
 }).strict();
 
 export const LimitsConfigSchema = z.object({
@@ -90,7 +88,6 @@ export type RepoConfig = {
   allow_non_git?: boolean;
   writes?: WritePolicyConfigDocument;
   operations?: OperationsPolicyConfigDocument;
-  agent_runner?: z.input<typeof AgentRunnerConfigSchema>;
 };
 export type RepoReaderConfig = {
   repos: RepoConfig[];

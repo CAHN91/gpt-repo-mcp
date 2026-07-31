@@ -161,7 +161,7 @@ Work-session tools store implementation continuity under `.chatgpt/work-sessions
 
 `repo_code_index` accepts only an approved `repo_id` and fixed `start` or `status` action. ChatGPT must obtain user approval before `start`. The implementation derives the repository root from `RootRegistry`, sets `CBM_ALLOWED_ROOT` to that exact root, starts the provider outside the repository so an upstream global `auto_index` setting cannot implicitly index it, disables persistent repo artifacts, deduplicates concurrent jobs, and never accepts client-provided paths, commands, executables, modes, or arguments.
 
-`repo_failure_diagnose` reads only saved validation artifacts, explicitly supplied repo-local dev-harness JSON artifacts, safe work-session/write metadata, Git status, and bounded symbol metadata. Artifact paths are schema-restricted, all reads pass through the repository sandbox, outside-root stack paths are discarded, text is bounded and redacted, and focused-test payloads are emitted only for policy-allowlisted paths. It never executes a suggested check or presents heuristics as proven root cause.
+`repo_failure_diagnose` reads only saved validation artifacts, safe work-session/write metadata, Git status, and bounded symbol metadata. Artifact paths are schema-restricted, all reads pass through the repository sandbox, outside-root stack paths are discarded, text is bounded and redacted, and focused-test payloads are emitted only for policy-allowlisted paths. It never executes a suggested check or presents heuristics as proven root cause.
 
 `repo_semantic_review` is a read-only deterministic risk surface over bounded staged/unstaged diffs, content-free symbol metadata, and latest validation status. It emits no raw source beyond existing bounded diff processing, deduplicates and caps findings, marks confidence explicitly, and treats only high-priority high-confidence rules as semantic ship blockers. It does not mutate the existing Git review state or execute recommended checks.
 
@@ -214,10 +214,9 @@ Audit logs may include tool name, `repo_id`, safe repo-relative paths or globs, 
 Every request-failure category is correlated with the request id. Audit logs must not include request bodies, tool arguments, full MCP session ids, headers, returned file text, file content, secret-looking values, raw structured outputs, raw errors, error messages, stack traces, environment variables, tokens, credentials, SSH keys, private keys, or unredacted absolute paths. Client-facing 500 responses remain generic.
 
 HTTP MCP transports are stored in a bounded `Map`, not under client-controlled
-object properties. The main server defaults to 100 concurrent sessions and a
-30-minute idle TTL; the local dev harness defaults to 50 sessions and a
-15-minute TTL. Expired, explicitly deleted, and shutdown sessions close their
-transports. Capacity exhaustion returns a generic 503 response without
+object properties. The server defaults to 100 concurrent sessions and a
+30-minute idle TTL. Expired, explicitly deleted, and shutdown sessions close
+their transports. Capacity exhaustion returns a generic 503 response without
 disclosing session identifiers.
 
 `GPT_REPO_CONFIG`, `GPT_REPO_PUBLIC_PATH_TOKEN`, `GPT_REPO_HOST`,

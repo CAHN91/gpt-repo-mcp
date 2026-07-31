@@ -317,9 +317,9 @@ Indexing runs as a deduplicated background job. Poll `action: "status"` until th
 
 ### `repo_failure_diagnose`
 
-Normalizes saved validation and optional explicit `.chatgpt/dev-harness/**/*.json` evidence for TypeScript, ESLint, Vitest/Jest, pytest, Node, and Python failures. It correlates diagnostic locations with current changed paths, current work-session/latest-write paths, symbol definitions, call/reference expansion, reverse dependents, and affected tests.
+Normalizes saved validation evidence for TypeScript, ESLint, Vitest/Jest, pytest, Node, and Python failures. It correlates diagnostic locations with current changed paths, current work-session/latest-write paths, symbol definitions, call/reference expansion, reverse dependents, and affected tests.
 
-Input: `repo_id`, optional `validation_id` (otherwise latest), optional `dev_harness_artifacts[]`, optional `scope_paths[]`, `max_diagnostics`, and `max_candidates`.
+Input: `repo_id`, optional `validation_id` (otherwise latest), optional `scope_paths[]`, `max_diagnostics`, and `max_candidates`.
 
 Output separates normalized `diagnostics[]`, concrete `evidence[]`, deterministic `heuristics[]`, confidence, symbols, affected tests, and recommended checks. Safe next-tool payloads may target one file, call `repo_symbol_context`, or propose focused `repo_validate` only when repository operations policy enables validation and every proposed test matches `validation_test_path_globs`.
 

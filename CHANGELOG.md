@@ -30,8 +30,8 @@ All notable public changes to GPT Repo MCP are documented here.
 - Duplicate aliases `repo_git_stage`, `repo_git_unstage`, and
   `repo_git_commit`.
 - The overlapping advisory routers `repo_next_action` and `repo_plan_review`.
-- Internal agent-runner and development-harness execution from the OSS
-  distribution.
+- Project-specific development utilities that are not part of the public MCP
+  server.
 
 ### Security
 

@@ -190,8 +190,8 @@ Prepare a focused Codex task for this migration. After the implementation is
 complete, review its result against the real diff and acceptance criteria.
 ```
 
-The public OSS server does not include or start an agent runner. Writing a task
-does not execute an agent, stage changes, commit, push, or deploy.
+Writing a task does not execute an implementation agent, stage changes, commit,
+push, or deploy. External process execution remains outside the public server.
 
 ## Permission Modes
 

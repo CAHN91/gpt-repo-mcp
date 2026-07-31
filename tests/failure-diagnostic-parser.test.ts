@@ -21,7 +21,7 @@ describe("parseFailureDiagnostics", () => {
   });
 
   test("drops absolute stack paths outside the approved repository root", () => {
-    const diagnostics = parseFailureDiagnostics("at execute (/outside/private/app.ts:4:2)", "dev_harness", ".chatgpt/dev-harness/debug/report.json", "/workspace/repo");
+    const diagnostics = parseFailureDiagnostics("at execute (/outside/private/app.ts:4:2)", "validation", ".chatgpt/validation/test/result.json", "/workspace/repo");
     expect(diagnostics[0]?.tool).toBe("node");
     expect(diagnostics[0]?.path).toBeUndefined();
   });

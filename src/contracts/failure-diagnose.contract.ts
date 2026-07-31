@@ -3,13 +3,9 @@ import { RepoInputSchema } from "./repo.contract.js";
 import { SymbolConfidenceSchema } from "./symbol-context.contract.js";
 
 const ValidationIdSchema = z.string().regex(/^validation-[A-Za-z0-9-]{1,160}$/);
-const DevHarnessArtifactSchema = z.string().regex(/^\.chatgpt\/dev-harness\/[A-Za-z0-9._/-]+\.json$/).refine((path) => !path.split("/").includes(".."), {
-  message: "Expected a safe repo-local dev-harness JSON artifact path."
-});
 
 export const FailureDiagnoseInputSchema = RepoInputSchema.extend({
   validation_id: ValidationIdSchema.optional().describe("Optional validation id; omit to inspect the latest saved validation artifact."),
-  dev_harness_artifacts: z.array(DevHarnessArtifactSchema).max(10).optional().describe("Optional explicit repo-local dev-harness JSON artifacts to correlate."),
   scope_paths: z.array(z.string().min(1)).max(50).optional().describe("Optional repo-relative paths that bound candidate correlation."),
   max_diagnostics: z.number().int().positive().max(200).optional().describe("Maximum normalized diagnostics to return, capped at 200."),
   max_candidates: z.number().int().positive().max(50).optional().describe("Maximum ranked candidates to return, capped at 50.")
@@ -17,7 +13,7 @@ export const FailureDiagnoseInputSchema = RepoInputSchema.extend({
 
 export const FailureDiagnosticSchema = z.object({
   tool: z.enum(["typescript", "eslint", "vitest", "jest", "pytest", "node", "python", "unknown"]),
-  source: z.enum(["validation", "dev_harness"]),
+  source: z.literal("validation"),
   artifact_path: z.string(),
   message: z.string(),
   code: z.string().optional(),

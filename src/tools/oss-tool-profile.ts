@@ -5,8 +5,8 @@ import type { ToolName } from "./contracts.js";
  *
  * This intentionally duplicates the canonical registry order so adding an
  * internal tool cannot expand the public surface without a separate review.
- * Agent-runner execution and the dev harness are runtime/package concerns,
- * not MCP tools, and are excluded by the export boundary.
+ * Non-tool development utilities cannot expand the public surface through
+ * package discovery and are kept outside this explicit profile.
  */
 export const OSS_TOOL_ORDER = [
   "repo_list_roots",

@@ -4,15 +4,13 @@ import { z } from "zod";
 import { DEFAULT_LIMITS } from "../policies/limits.js";
 import { RepoReaderError } from "../runtime/errors.js";
 import { CodeIntelligenceConfigSchema, OperationsPolicyConfigSchema, WritePolicyConfigSchema } from "../config/schema.js";
-import { AgentRunnerConfigSchema } from "../delegation/runner-config.js";
 
 const RepoConfigSchema = z.object({
   repo_id: z.string().min(1),
   display_name: z.string().min(1),
   root: z.string().min(1),
   writes: WritePolicyConfigSchema.optional(),
-  operations: OperationsPolicyConfigSchema.optional(),
-  agent_runner: AgentRunnerConfigSchema.optional()
+  operations: OperationsPolicyConfigSchema.optional()
 });
 
 const ConfigSchema = z.object({

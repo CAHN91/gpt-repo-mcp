@@ -91,14 +91,11 @@ describe("package startup scripts", () => {
     expect(connectionOptions).toContain("tunnel-client run --profile <profile>");
   });
 
-  test("public hygiene script blocks historical docs and local-only artifacts", async () => {
+  test("public hygiene script blocks local-only artifacts and stale public claims", async () => {
     const script = await readFile(join(process.cwd(), "scripts", "check-public.mjs"), "utf8");
 
     expect(script).toContain("git");
     expect(script).toContain("ls-files");
-    expect(script).toContain("MASTER_PROMPT.md");
-    expect(script).toContain("docs/CHATGPT_DEV_MODE.md");
-    expect(script).toContain("AGENTS.md");
     expect(script).toContain("tools/");
     expect(script).toContain("config.local.json");
     expect(script).toContain(".gitignore");
@@ -106,8 +103,8 @@ describe("package startup scripts", () => {
     expect(script).toContain(".gitleaksignore");
     expect(script).toContain("security/");
     expect(script).toContain(".chatgpt/");
-    expect(script).toContain(".agent-recorder/");
-    expect(script).toContain(".agentbus/");
+    expect(script).toContain("read-only TypeScript MCP server");
+    expect(script).toContain("/Users/");
   });
 
   test("public hygiene script rejects any tracked .chatgpt artifact", async () => {
@@ -146,7 +143,7 @@ describe("package startup scripts", () => {
   test("gitignore uses public-safe local artifact wording", async () => {
     const gitignore = await readFile(join(process.cwd(), ".gitignore"), "utf8");
 
-    expect(gitignore).toContain("# Local agent artifacts");
+    expect(gitignore).toContain("# Local GPT Repo MCP artifacts");
     expect(gitignore).toContain(".chatgpt/");
     expect(gitignore).not.toContain("Agent Recorder");
   });

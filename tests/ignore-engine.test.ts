@@ -10,11 +10,10 @@ describe("IgnoreEngine", () => {
     expect(engine.isIgnored("src/index.ts")).toBe(false);
   });
 
-  test("applies local agent and recorder excludes", () => {
+  test("applies local tool metadata excludes", () => {
     const engine = new IgnoreEngine();
 
-    expect(engine.isIgnored(".agent-recorder/session.jsonl")).toBe(true);
-    expect(engine.isIgnored(".agentbus/recorder/events.jsonl")).toBe(true);
+    expect(engine.isIgnored(".agent-cache/session.json")).toBe(true);
     expect(engine.isIgnored(".codex/cache/state.json")).toBe(true);
   });
 
@@ -26,7 +25,7 @@ describe("IgnoreEngine", () => {
     expect(engine.isSensitiveCandidate("src/app.ts")).toBe(false);
   });
 
-  test("always blocks private agent runner control artifacts and replies", () => {
+  test("always blocks private worker control artifacts and replies", () => {
     const engine = new IgnoreEngine();
     const run = ".chatgpt/codex-runs/2026-07-13T170000Z-private";
 

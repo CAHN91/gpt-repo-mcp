@@ -65,7 +65,7 @@ All tool errors return:
 | `VALIDATION_DISABLED` | Repository validation is disabled because operations validation has not been explicitly enabled. |
 | `VALIDATION_PROFILE_UNAVAILABLE` | Requested validation profile could not be resolved from an npm script or supported safe project runner. |
 | `VALIDATION_NODE_RUNTIME_UNAVAILABLE` | Repository requests an exact Node.js version, but no matching safe installed runtime exists under a supported manager root. |
-| `RUNNER_LOCK_ACTIVE` | A local agent-runner lock is already held by an active worker or fresh replacement guard. The error is retryable and may include safe lock metadata such as `run_id`, `owner_id`, and `updated_at`. |
+| `RUNNER_LOCK_ACTIVE` | A delegation run lock is already held by an active worker or fresh replacement guard. The error is retryable and may include safe lock metadata such as `run_id`, `owner_id`, and `updated_at`. |
 | `RUNNER_RUN_ID_INVALID` | A runner run id or runner manifest was invalid, mismatched its directory, or referenced non-canonical run artifact paths. |
 | `WORK_SESSION_REPO_MISMATCH` | Requested work-session state belongs to a different repository id. |
 | `GIT_ERROR` | A git operation failed. |

@@ -72,7 +72,7 @@ npm test -- tests/file-writer.test.ts tests/git-operations-service.test.ts tests
 - Public hygiene checks must pass before release.
 - The built `dist/server.js` runtime smoke must pass before release.
 - MCP contract tests pass and snapshots match intentional tool surface changes.
-- No private local paths, personal workflow instructions, tokens, or recorder guidance are present in public docs.
+- No private local paths, personal workflow instructions, tokens, or internal development guidance are present in public docs.
 - Public documents do not link to internal roadmaps, dated specifications, or
   source-only runtime documentation.
 - `package.json` metadata is accurate and `package-lock.json` is unchanged unless dependencies changed intentionally.

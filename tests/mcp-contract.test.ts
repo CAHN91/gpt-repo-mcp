@@ -400,9 +400,8 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when failed validation or dev-harness evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
+            "description": "Use this when saved validation evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
             "inputKeys": [
-              "dev_harness_artifacts",
               "max_candidates",
               "max_diagnostics",
               "repo_id",

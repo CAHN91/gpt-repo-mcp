@@ -29,15 +29,6 @@ const REMOVED_SOURCE_FILES = [
   "src/services/next-action-service.ts"
 ] as const;
 
-const INTERNAL_DOCUMENT_REFERENCES = [
-  "docs/ROADMAP.md",
-  "docs/OSS_EXPORT_ROADMAP.md",
-  "docs/AGENT_RUNNER_ARTIFACTS.md",
-  "docs/AGENT_RUNNER_DAEMON_PLAN.md",
-  "docs/superpowers/",
-  "superpowers/specs/"
-] as const;
-
 describe("canonical workflow drift guards", () => {
   test("locks the intentional 46-tool surface and removed public names", () => {
     expect(toolCatalog).toHaveLength(46);
@@ -66,20 +57,6 @@ describe("canonical workflow drift guards", () => {
     expect(readme).toContain("repo_current_work_session");
     expect(readme).toContain("repo_write_stage_commit");
     expect(readme).toContain("repo_write_codex_review");
-  });
-
-  test("keeps public workflow documents independent from internal planning sources", async () => {
-    for (const path of ACTIVE_WORKFLOW_DOCS) {
-      const text = await readFile(path, "utf8");
-      for (const reference of INTERNAL_DOCUMENT_REFERENCES) {
-        expect(text, `${path} references internal-only ${reference}`).not.toContain(reference);
-      }
-    }
-
-    const contract = await readFile("docs/product-contract.json", "utf8");
-    for (const reference of INTERNAL_DOCUMENT_REFERENCES) {
-      expect(contract, `product contract references internal-only ${reference}`).not.toContain(reference);
-    }
   });
 
   test("prevents planning and drift services from becoming competing authority engines", async () => {

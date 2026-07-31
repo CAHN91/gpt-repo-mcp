@@ -50,17 +50,6 @@ export class FailureEvidenceLoader {
       warnings.push("FAILURE_VALIDATION_NOT_FOUND");
     }
 
-    for (const artifactPath of input.dev_harness_artifacts ?? []) {
-      const path = validateRepoPath(artifactPath);
-      const loaded = await this.readJson(path);
-      if (!loaded) {
-        warnings.push(`FAILURE_DEV_HARNESS_ARTIFACT_MISSING:${path}`);
-        continue;
-      }
-      truncated ||= loaded.truncated;
-      diagnostics.push(...parseFailureDiagnostics(extractJsonStrings(loaded.value), "dev_harness", path, this.root));
-    }
-
     return {
       validation,
       diagnostics,
@@ -117,23 +106,4 @@ function extractCommandText(commands: unknown): string {
     const value = command as { stdout_tail?: unknown; stderr_tail?: unknown };
     return [value.stdout_tail, value.stderr_tail].filter((item): item is string => typeof item === "string");
   }).join("\n").slice(0, MAX_EXTRACTED_TEXT_CHARS);
-}
-
-function extractJsonStrings(value: unknown): string {
-  const strings: string[] = [];
-  let total = 0;
-  const visit = (item: unknown, depth: number): void => {
-    if (depth > 8 || total >= MAX_EXTRACTED_TEXT_CHARS) return;
-    if (typeof item === "string") {
-      const remaining = MAX_EXTRACTED_TEXT_CHARS - total;
-      const selected = item.slice(0, remaining);
-      strings.push(selected);
-      total += selected.length;
-      return;
-    }
-    if (Array.isArray(item)) for (const child of item.slice(0, 1_000)) visit(child, depth + 1);
-    else if (item && typeof item === "object") for (const child of Object.values(item).slice(0, 1_000)) visit(child, depth + 1);
-  };
-  visit(value, 0);
-  return strings.join("\n");
 }
