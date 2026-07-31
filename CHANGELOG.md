@@ -2,7 +2,7 @@
 
 All notable public changes to GPT Repo MCP are documented here.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-07-31
 
 ### Added
 
