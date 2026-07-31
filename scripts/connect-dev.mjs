@@ -4,6 +4,11 @@ import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { createConnectorRuntime } from "./connector-runtime.mjs";
+import {
+  resolveNgrokTunnelCommand,
+  resolveNgrokVersionCommand,
+  resolveNpmDevCommand
+} from "./platform-command.mjs";
 
 const CONFIG_PATH = "./config.local.json";
 const PORT = "8787";
@@ -21,7 +26,8 @@ async function ensureConfigExists() {
 }
 
 function ensureNgrokAvailable() {
-  const checker = spawn("ngrok", ["version"], { stdio: "ignore" });
+  const command = resolveNgrokVersionCommand();
+  const checker = spawn(command.command, command.args, { stdio: "ignore" });
   checker.once("error", () => {
     globalThis.console.error("ngrok not found. Install ngrok or run npm run mcp and use another tunnel.");
     process.exit(1);
@@ -82,7 +88,8 @@ async function announceNgrokUrl() {
 async function startProcesses() {
   globalThis.console.log("Use the HTTPS ngrok URL with the printed /t/<token>/mcp path in ChatGPT Developer Mode.");
 
-  const mcp = spawn("npm", ["run", "dev"], {
+  const mcpCommand = resolveNpmDevCommand();
+  const mcp = spawn(mcpCommand.command, mcpCommand.args, {
     env: {
       ...process.env,
       GPT_REPO_CONFIG: CONFIG_PATH,
@@ -107,7 +114,8 @@ async function startProcesses() {
     // No reusable tunnel detected yet.
   }
 
-  const tunnel = spawn("ngrok", ["http", PORT, "--log=stdout"], {
+  const tunnelCommand = resolveNgrokTunnelCommand(PORT);
+  const tunnel = spawn(tunnelCommand.command, tunnelCommand.args, {
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"]
   });

@@ -46,6 +46,10 @@ describe("package startup scripts", () => {
     expect(script).toContain("ChatGPT MCP URL");
     expect(script).toContain("Reusing existing ngrok tunnel");
     expect(script).toContain("readNgrokHttpsUrl");
+    expect(script).toContain("resolveNpmDevCommand");
+    expect(script).toContain("resolveNgrokVersionCommand");
+    expect(script).toContain("resolveNgrokTunnelCommand");
+    expect(script).not.toContain("shell:");
   });
 
   test("includes Cloudflare tunnel startup script", async () => {
