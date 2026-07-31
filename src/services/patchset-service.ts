@@ -272,7 +272,12 @@ export class PatchsetService {
       .map((result) => ({ from: result.path, to: result.new_path! }));
     const changedPaths = changedPathsForResults(changedResults);
     const hunkDiagnostics = hunkDiagnosticsForResults(results);
-    const rollbackHint = rollbackHintForResults(changedResults, Boolean(rollbackHead));
+    const requestedRollbackHint = rollbackHintForResults(changedResults, Boolean(rollbackHead));
+    const pendingRollbackHint = rollbackHintForResults(
+      changedResults,
+      false,
+      "First-class rollback is not advertised until the patchset apply ledger entry is recorded."
+    );
     const receipt = await new OperationReceiptService(this.root).writeLastWrite({
       tool: "repo_apply_patchset",
       repo_id: args.repo_id,
@@ -298,8 +303,17 @@ export class PatchsetService {
         ...(result.old_sha256 ? { old_sha256: result.old_sha256 } : {}),
         ...(result.new_sha256 ? { new_sha256: result.new_sha256 } : {})
       })),
-      rollback_hint: rollbackHint
+      rollback_hint: requestedRollbackHint,
+      rollback_hint_before_ledger: pendingRollbackHint
     });
+    const rollbackRecorded = Boolean(receipt.operation_receipt?.ledger_path);
+    const rollbackHint = rollbackHintForResults(
+      changedResults,
+      Boolean(rollbackHead && rollbackRecorded),
+      rollbackHead
+        ? "First-class rollback is unavailable because the patchset apply ledger entry could not be recorded; review the patchset and current Git state before recovery."
+        : undefined
+    );
 
     return PatchsetApplyResultSchema.parse({
       ok: true,
@@ -326,7 +340,7 @@ export class PatchsetService {
       warnings: receipt.warnings,
       next_tool_payloads: {
         repo_review_patchset: { repo_id: args.repo_id, patchset_id: args.patchset_id },
-        ...(changedResults.length > 0 && rollbackHead
+        ...(changedResults.length > 0 && rollbackHead && rollbackRecorded
           ? {
               repo_rollback_patchset: {
                 repo_id: args.repo_id,

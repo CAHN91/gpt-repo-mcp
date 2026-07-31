@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, chmod, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
@@ -198,6 +198,10 @@ describe("PatchsetService", () => {
       operation_id: result.operation_id,
       changed_paths: ["docs/new.md", "src/app.ts"]
     });
+    const receipt = JSON.parse(
+      await readFile(join(fixture.root, ".chatgpt", "operations", "last-write.json"), "utf8")
+    );
+    expect(receipt.rollback_hint.executable).toBe(true);
   });
 
   test("apply without a bound HEAD keeps rollback guidance accurate but does not invent a rollback payload", async () => {
@@ -223,6 +227,47 @@ describe("PatchsetService", () => {
     expect(result.next_tool_payloads).toEqual({
       repo_review_patchset: { repo_id: "fixture", patchset_id: prepared.patchset_id }
     });
+  });
+
+  test("apply does not advertise rollback when its ledger entry cannot be recorded", async () => {
+    const fixture = await createRepoFixture();
+    const head = await initGitRepo(fixture.root);
+    const service = createRollbackService(fixture.root);
+    const prepared = await service.prepare({
+      repo_id: "fixture",
+      intent: "Apply without durable rollback state",
+      base_head_sha: head,
+      files: [
+        { path: "docs/new.md", operation: "create", content: "New\n", expected_missing: true }
+      ]
+    });
+    await mkdir(join(fixture.root, ".chatgpt", "operations", "ledger.jsonl"), { recursive: true });
+
+    const result = await service.apply({
+      repo_id: "fixture",
+      patchset_id: prepared.patchset_id,
+      expected_head_sha: head
+    });
+
+    expect(result.warnings).toContain("OPERATION_LEDGER_APPEND_FAILED");
+    expect(result.rollback_hint).toMatchObject({
+      executable: false,
+      reason: expect.stringContaining("ledger")
+    });
+    expect(result.operation_receipt).not.toHaveProperty("ledger_path");
+    expect(result.next_tool_payloads).toEqual({
+      repo_review_patchset: { repo_id: "fixture", patchset_id: prepared.patchset_id }
+    });
+    const receipt = JSON.parse(
+      await readFile(join(fixture.root, ".chatgpt", "operations", "last-write.json"), "utf8")
+    );
+    expect(receipt.rollback_hint.executable).toBe(false);
+    await expect(service.rollback({
+      repo_id: "fixture",
+      patchset_id: prepared.patchset_id,
+      expected_head_sha: head,
+      dry_run: true
+    })).rejects.toMatchObject({ code: "PATCHSET_NOT_APPLIED" });
   });
 
   test("apply restores already written files after an unexpected write failure", async () => {

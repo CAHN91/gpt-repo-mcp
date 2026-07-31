@@ -26,7 +26,7 @@ import {
 import { sha256Text } from "./codex-task-policy.js";
 import { hashCanonical } from "./product-contract-service.js";
 import { matchesGlob } from "./glob-service.js";
-import { GitService } from "./git-service.js";
+import { GitService, type GitPathState } from "./git-service.js";
 import { codexReviewAttestationAnySha256 } from "./codex-review-state.js";
 import type { WritePolicy } from "./write-policy.js";
 
@@ -60,6 +60,11 @@ export class DelegationGateService {
       this.discoverRunIds()
     ]);
     const applicableRuns: DelegationGateRunDecision[] = [];
+    const runCandidates: Array<{
+      manifest: DelegationRunManifestV3;
+      governed_paths: string[];
+      claimed_paths: string[];
+    }> = [];
     const warnings = [...discovered.warnings];
 
     for (const runId of discovered.run_ids) {
@@ -69,14 +74,36 @@ export class DelegationGateService {
         if (orphanedGate) applicableRuns.push(orphanedGate);
         continue;
       }
-      const applicablePaths = await this.applicablePaths(loaded.manifest, requestedPaths);
-      if (applicablePaths.length === 0) continue;
-      applicableRuns.push(await this.evaluateRun({
-        manifest: loaded.manifest,
-        applicable_paths: applicablePaths,
-        head_sha: status.head_sha,
-        legacy_review_state_fingerprint: input.review_state_fingerprint
-      }));
+      const coverage = await this.pathCoverage(loaded.manifest, requestedPaths);
+      if (coverage.governed_paths.length > 0) {
+        runCandidates.push({ manifest: loaded.manifest, ...coverage });
+      }
+    }
+
+    const coveredPaths = new Set(runCandidates.flatMap(({ claimed_paths: paths }) => paths));
+    for (const candidate of runCandidates) {
+      const uncoveredPaths = candidate.governed_paths.filter((path) => !coveredPaths.has(path));
+      if (uncoveredPaths.length > 0) {
+        applicableRuns.push(runDecision(
+          {
+            manifest: candidate.manifest,
+            applicable_paths: uniqueSorted([...candidate.claimed_paths, ...uncoveredPaths])
+          },
+          candidate.manifest.delegation_audit.mode,
+          "stale",
+          "stale",
+          ["DELEGATION_REVIEW_STATE_CHANGED"]
+        ));
+        continue;
+      }
+      if (candidate.claimed_paths.length > 0) {
+        applicableRuns.push(await this.evaluateRun({
+          manifest: candidate.manifest,
+          applicable_paths: candidate.claimed_paths,
+          head_sha: status.head_sha,
+          legacy_review_state_fingerprint: input.review_state_fingerprint
+        }));
+      }
     }
 
     const enforceFailures = applicableRuns.filter((entry) => entry.governance_mode === "enforce" && entry.status !== "passed");
@@ -186,25 +213,58 @@ export class DelegationGateService {
     }
   }
 
-  private async applicablePaths(
+  private async pathCoverage(
     manifest: DelegationRunManifestV3,
     requestedPaths: string[]
-  ): Promise<string[]> {
+  ): Promise<{ governed_paths: string[]; claimed_paths: string[] }> {
     const baselineChanged = new Set(manifest.baseline.initial_changed_paths);
-    const modernAttribution = Boolean(manifest.baseline.initial_path_states);
     const authorized = requestedPaths.filter((path) =>
       manifest.authorization.effective_scope.some((pattern) => matchesGlob(path, pattern))
-      && (modernAttribution || !baselineChanged.has(path))
     );
-    const resultText = await readSafeRunArtifact(this.root, codexRunPaths(manifest.run_id).resultJsonPath, MAX_RESULT_BYTES).catch(() => undefined);
-    if (resultText === undefined) return modernAttribution ? [] : authorized;
+    if (!manifest.baseline.initial_path_states) {
+      const governedPaths = authorized.filter((path) => !baselineChanged.has(path));
+      return {
+        governed_paths: governedPaths,
+        claimed_paths: await this.claimedPaths(manifest, governedPaths, true)
+      };
+    }
+    const baselineStates = new Map(
+      manifest.baseline.initial_path_states.map((state) => [state.path, state])
+    );
+    const currentStates = new Map(
+      (await this.git.pathStates(authorized.filter((path) => baselineChanged.has(path))))
+        .map((state) => [state.path, state])
+    );
+    const governedPaths = authorized.filter((path) =>
+      !baselineChanged.has(path)
+      || pathStateChanged(baselineStates.get(path), currentStates.get(path))
+    );
+    return {
+      governed_paths: governedPaths,
+      claimed_paths: await this.claimedPaths(manifest, governedPaths, false)
+    };
+  }
+
+  private async claimedPaths(
+    manifest: DelegationRunManifestV3,
+    governedPaths: string[],
+    useGovernedFallback: boolean
+  ): Promise<string[]> {
+    const resultText = await readSafeRunArtifact(
+      this.root,
+      codexRunPaths(manifest.run_id).resultJsonPath,
+      MAX_RESULT_BYTES
+    ).catch(() => undefined);
+    if (resultText === undefined) return useGovernedFallback ? governedPaths : [];
     try {
       const result = DelegationResultV3Schema.parse(JSON.parse(resultText) as unknown);
-      if (result.repo_id !== manifest.repo_id || result.run_id !== manifest.run_id) return modernAttribution ? [] : authorized;
+      if (result.repo_id !== manifest.repo_id || result.run_id !== manifest.run_id) {
+        return useGovernedFallback ? governedPaths : [];
+      }
       const claimed = new Set(result.changed_files);
-      return authorized.filter((path) => claimed.has(path));
+      return governedPaths.filter((path) => claimed.has(path));
     } catch {
-      return modernAttribution ? [] : authorized;
+      return useGovernedFallback ? governedPaths : [];
     }
   }
 
@@ -283,6 +343,10 @@ export class DelegationGateService {
     }
     if (attestation.schema_version !== 2 || attestation.review_gate_sha256 !== gate.gate_sha256) {
       return runDecision(input, mode, "stale", "stale", ["DELEGATION_REVIEW_GATE_BINDING_MISSING"], attestation.product_verdict);
+    }
+    const attestedPaths = new Set(attestation.binding.changed_paths);
+    if (input.applicable_paths.some((path) => !attestedPaths.has(path))) {
+      return runDecision(input, mode, "stale", "stale", ["DELEGATION_REVIEW_STATE_CHANGED"], attestation.product_verdict);
     }
 
     const [promptText, resultText] = await Promise.all([
@@ -368,6 +432,16 @@ function runDecision(
     ...(productVerdict ? { product_verdict: productVerdict } : {}),
     reasons
   };
+}
+
+function pathStateChanged(
+  baseline: GitPathState | undefined,
+  current: GitPathState | undefined
+): boolean {
+  if (!baseline || !current) return false;
+  return baseline.exists !== current.exists
+    || baseline.kind !== current.kind
+    || baseline.content_sha256 !== current.content_sha256;
 }
 
 function emptyDecision(paths: string[]): DelegationGateDecision {

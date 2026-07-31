@@ -19,6 +19,7 @@ export const OPERATION_LEDGER_PATH = ".chatgpt/operations/ledger.jsonl";
 
 type WriteLastWriteInput = Omit<OperationReceipt, "schema_version" | "operation_id" | "timestamp"> & {
   ledger_event_type?: OperationLedgerEntry["event_type"];
+  rollback_hint_before_ledger?: OperationReceipt["rollback_hint"];
 };
 
 export class OperationReceiptService {
@@ -30,7 +31,11 @@ export class OperationReceiptService {
     warnings: string[];
   }> {
     try {
-      const { ledger_event_type: ledgerEventType, ...receiptInput } = input;
+      const {
+        ledger_event_type: ledgerEventType,
+        rollback_hint_before_ledger: rollbackHintBeforeLedger,
+        ...receiptInput
+      } = input;
       const receipt: OperationReceipt = {
         schema_version: 1,
         operation_id: createOperationId(),
@@ -38,9 +43,21 @@ export class OperationReceiptService {
         ...sanitizeWriteInput(receiptInput)
       };
       const parsed = OperationReceiptSchema.parse(receipt);
+      const pendingReceipt = rollbackHintBeforeLedger
+        ? OperationReceiptSchema.parse({
+            ...parsed,
+            rollback_hint: sanitizeWriteInput({
+              ...receiptInput,
+              rollback_hint: rollbackHintBeforeLedger
+            }).rollback_hint
+          })
+        : parsed;
       const absolutePath = join(this.root, LAST_WRITE_RECEIPT_PATH);
-      await atomicWriteJson(absolutePath, parsed);
+      await atomicWriteJson(absolutePath, pendingReceipt);
       const ledgerResult = await this.appendLedgerEntry(parsed, ledgerEventType);
+      if (ledgerResult.ok && rollbackHintBeforeLedger) {
+        await atomicWriteJson(absolutePath, parsed);
+      }
       return {
         ok: true,
         operation_receipt: {

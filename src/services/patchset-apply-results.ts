@@ -13,14 +13,18 @@ export type PatchsetApplyFileResult = {
   hunk_diagnostics?: PatchsetHunkDiagnostic[];
 };
 
-export function rollbackHintForResults(results: PatchsetApplyFileResult[], rollbackExecutable: boolean) {
+export function rollbackHintForResults(
+  results: PatchsetApplyFileResult[],
+  rollbackExecutable: boolean,
+  unavailableReason = "First-class rollback requires an expected Git HEAD; review the patchset and current Git state before calling repo_rollback_patchset."
+) {
   return {
     executable: rollbackExecutable,
     reason: results.length === 0
       ? "No changed patchset paths require rollback."
       : rollbackExecutable
         ? "First-class rollback is available through repo_rollback_patchset while the patchset remains uncommitted, unstaged, and unchanged since apply."
-        : "First-class rollback requires an expected Git HEAD; review the patchset and current Git state before calling repo_rollback_patchset.",
+        : unavailableReason,
     paths: results.flatMap((result) => {
       if (result.operation === "create") {
         return [{

@@ -112,6 +112,36 @@ describe("RNV-03C shared delegation gate", () => {
     expect(result.commit_sha).toMatch(/^[a-f0-9]{40}$/);
   });
 
+  test("an enforce gate blocks an authorized changed path omitted from the agent result", async () => {
+    const fixture = await gateFixture("enforce");
+    await writeTechnicalRun(fixture.root, RUN_A);
+    await writeFile(join(fixture.root, "src", "app.ts"), "export const reportedChange = true;\n");
+    await writeFile(join(fixture.root, "src", "unreported.ts"), "export const unreportedChange = true;\n");
+    await writeV3Result(fixture.root, RUN_A, { changed_files: ["src/app.ts"] });
+    await attestTechnical(fixture.root, RUN_A);
+
+    const gate = new DelegationGateService(fixture.root);
+    const decision = await gate.evaluate({
+      repo_id: "fixture",
+      paths: ["src/unreported.ts"],
+      operation: "stage"
+    });
+
+    expect(decision.status).toBe("blocked");
+    expect(decision.applicable_runs[0]).toMatchObject({
+      run_id: RUN_A,
+      applicable_paths: ["src/unreported.ts"],
+      status: "stale",
+      review_status: "stale"
+    });
+    expect(decision.blocking_reasons).toContain("DELEGATION_REVIEW_STATE_CHANGED");
+    await expect(gate.assertAllowed({
+      repo_id: "fixture",
+      paths: ["src/unreported.ts"],
+      operation: "stage"
+    })).rejects.toMatchObject({ code: "DELEGATION_REVIEW_GATE_BLOCKED" });
+  });
+
   test("product FAIL is durable and blocks every ship-capable gate path", async () => {
     const fixture = await gateFixture("enforce");
     const manifest = await writeProductRun(fixture.root, RUN_A);
