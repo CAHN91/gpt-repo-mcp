@@ -25,7 +25,7 @@ describe("DecisionLogService", () => {
       }
     }, null, 2));
 
-    const result = await new DecisionLogService(fixture.root, new PathSandbox(fixture.root)).decisionLog();
+    const result = await new DecisionLogService(new PathSandbox(fixture.root)).decisionLog();
 
     expect(result.decisions).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -54,7 +54,7 @@ describe("DecisionLogService", () => {
     const fixture = await createRepoFixture();
     await writeFile(join(fixture.root, "README.md"), "# Demo\nDecision: read-only first.\n");
 
-    const result = await new DecisionLogService(fixture.root, new PathSandbox(fixture.root)).decisionLog({
+    const result = await new DecisionLogService(new PathSandbox(fixture.root)).decisionLog({
       include_sources: ["package"]
     });
 
@@ -70,7 +70,7 @@ describe("DecisionLogService", () => {
     await writeFile(join(fixture.root, "docs", "DECISIONS.md"), `Decision: keep this visible.\n${"x".repeat(33_000)}\n`);
     await writeFile(join(fixture.root, "docs", "secrets", "decision.md"), "Decision: do not expose me.\n");
 
-    const result = await new DecisionLogService(fixture.root, new PathSandbox(fixture.root)).decisionLog({
+    const result = await new DecisionLogService(new PathSandbox(fixture.root)).decisionLog({
       include_sources: ["docs"]
     });
 

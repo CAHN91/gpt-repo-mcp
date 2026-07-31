@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { posix } from "node:path";
 import type { WriteFileActionSchema, WriteFileInput, WriteFileResult, WriteGroupedEditChange } from "../contracts/write.contract.js";
 import { RepoReaderError } from "../runtime/errors.js";
+import { atomicWriteFile, isNotFoundError } from "../runtime/fs-helpers.js";
 import { normalizeRepoPath } from "./ignore-engine.js";
 import { PathSandbox, validateRepoPath } from "./path-sandbox.js";
 import { SecretScanner } from "./secret-scanner.js";
@@ -50,16 +51,35 @@ export class FileWriter {
     private readonly policy: WritePolicy
   ) {}
 
+  async checkPreconditions(input: {
+    path: string;
+    create_dirs?: boolean;
+    expected_old_sha256?: string;
+    expected_missing?: boolean;
+  }): Promise<void> {
+    if (!input.expected_old_sha256 && !input.expected_missing) {
+      return;
+    }
+    const repoPath = validateRepoPath(input.path);
+    const target = await this.resolveTarget(repoPath, Boolean(input.create_dirs), true);
+    assertPreconditions(target, input);
+  }
+
   async write(input: Omit<WriteFileInput, "repo_id">): Promise<WriteFileResult> {
     const action = input.action ?? "write";
     const repoPath = validateRepoPath(input.path);
+    const dryRun = input.dry_run ?? false;
 
     this.policy.assertAllowed({ path: repoPath, bytes: 0, action });
 
-    const target = await this.resolveTarget(repoPath, Boolean(input.create_dirs));
+    const target = await this.resolveTarget(repoPath, Boolean(input.create_dirs), dryRun);
+    assertPreconditions(target, input);
     const computed = this.computeNextContent(action, input, target);
 
-    if (this.secretScanner.hasSecretValue(computed.nextText)) {
+    const hasBlockedSecret = action === "write"
+      ? this.secretScanner.hasSecretValue(computed.nextText)
+      : this.secretScanner.hasNewSecretValue(target.exists ? target.oldText : "", computed.nextText);
+    if (hasBlockedSecret) {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret content blocked: ${repoPath}`);
     }
     this.policy.assertAllowed({ path: repoPath, bytes: computed.nextContent.byteLength, action });
@@ -68,7 +88,6 @@ export class FileWriter {
     const newSha256 = sha256(computed.nextContent);
     const created = !target.exists;
     const changed = !target.exists || oldSha256 !== newSha256;
-    const dryRun = input.dry_run ?? false;
     const bytesWritten = dryRun || !changed ? 0 : computed.nextContent.byteLength;
 
     const result: WriteFileResult = {
@@ -99,6 +118,7 @@ export class FileWriter {
     this.policy.assertAllowed({ path: repoPath, bytes: 0, action: "edit" });
 
     const target = await this.resolveTarget(repoPath, false);
+    assertPreconditions(target, input);
     if (!target.exists) {
       throw new RepoReaderError("WRITE_TARGET_MISSING", `File does not exist: ${target.repoPath}`);
     }
@@ -107,7 +127,7 @@ export class FileWriter {
     }
 
     const nextText = applyGroupedEdits(target.oldText, input.edits, target.repoPath);
-    if (this.secretScanner.hasSecretValue(nextText)) {
+    if (this.secretScanner.hasNewSecretValue(target.oldText, nextText)) {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret content blocked: ${repoPath}`);
     }
     const nextContent = Buffer.from(nextText, "utf8");
@@ -187,7 +207,7 @@ export class FileWriter {
     return { action, nextText, nextContent: Buffer.from(nextText, "utf8") };
   }
 
-  private async resolveTarget(repoPath: string, createDirs: boolean): Promise<WriteTarget> {
+  private async resolveTarget(repoPath: string, createDirs: boolean, dryRun = false): Promise<WriteTarget> {
     try {
       const resolved = await this.sandbox.resolve(repoPath);
       if (!resolved.stat.isFile()) {
@@ -209,7 +229,7 @@ export class FileWriter {
       }
     }
 
-    await this.ensureParentDirectory(repoPath, createDirs);
+    await this.ensureParentDirectory(repoPath, createDirs, dryRun);
     return {
       exists: false,
       repoPath,
@@ -217,7 +237,7 @@ export class FileWriter {
     };
   }
 
-  private async ensureParentDirectory(repoPath: string, createDirs: boolean): Promise<void> {
+  private async ensureParentDirectory(repoPath: string, createDirs: boolean, dryRun: boolean): Promise<void> {
     const parentPath = posix.dirname(repoPath);
     if (parentPath === ".") {
       await assertWithinRoot(this.root, this.root);
@@ -245,10 +265,43 @@ export class FileWriter {
         if (!createDirs) {
           throw new RepoReaderError("WRITE_PARENT_MISSING", `Parent directory does not exist: ${parentPath}`);
         }
-        await mkdir(absolutePath);
-        await assertWithinRoot(this.root, absolutePath);
+        if (!dryRun) {
+          await mkdir(absolutePath);
+          await assertWithinRoot(this.root, absolutePath);
+        }
       }
     }
+  }
+}
+
+function assertPreconditions(
+  target: WriteTarget,
+  input: { expected_old_sha256?: string; expected_missing?: boolean }
+): void {
+  if (input.expected_missing && target.exists) {
+    throw new RepoReaderError("WRITE_TARGET_EXISTS", `Path already exists: ${target.repoPath}`, {
+      diagnostics: {
+        failed_path: target.repoPath,
+        current_sha256: target.oldSha256
+      }
+    });
+  }
+  if (input.expected_old_sha256 && !target.exists) {
+    throw new RepoReaderError("WRITE_TARGET_MISSING", `File does not exist: ${target.repoPath}`, {
+      diagnostics: {
+        failed_path: target.repoPath,
+        expected_old_sha256: input.expected_old_sha256
+      }
+    });
+  }
+  if (input.expected_old_sha256 && target.exists && input.expected_old_sha256 !== target.oldSha256) {
+    throw new RepoReaderError("WRITE_STALE_EXPECTED_SHA", `Current file SHA does not match expected_old_sha256: ${target.repoPath}`, {
+      diagnostics: {
+        failed_path: target.repoPath,
+        expected_old_sha256: input.expected_old_sha256,
+        current_sha256: target.oldSha256
+      }
+    });
   }
 }
 
@@ -353,17 +406,6 @@ function summarizeGroupedEdit(repoPath: string, editCount: number, changed: bool
   return `Applied ${editCount} ${editCount === 1 ? "edit" : "edits"} to ${repoPath}.`;
 }
 
-async function atomicWriteFile(path: string, content: Buffer): Promise<void> {
-  const tempPath = join(dirname(path), `.${basename(path)}.repo-write-${process.pid}-${randomUUID()}.tmp`);
-  try {
-    await writeFile(tempPath, content, { flag: "wx" });
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true });
-    throw error;
-  }
-}
-
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -377,13 +419,4 @@ async function assertWithinRoot(root: string, target: string): Promise<void> {
   if (rel !== "" && (rel.startsWith("..") || rel.includes(`..${sep}`))) {
     throw new RepoReaderError("SYMLINK_ESCAPE_REJECTED", `Path escapes approved repository: ${dirname(target)}`);
   }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === "object"
-      && "code" in error
-      && (error as { code?: unknown }).code === "ENOENT"
-  );
 }

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
+import { AgentRunsInputSchema, AgentRunsResultSchema } from "../src/contracts/agent-runs.contract.js";
+import { AgentReplyInputSchema, AgentReplyResultSchema } from "../src/contracts/agent-reply.contract.js";
 import {
   WriteChangesInputSchema,
   WriteChangesResultSchema,
@@ -21,15 +23,35 @@ import {
   GitUnstageResultSchema
 } from "../src/contracts/git-operations.contract.js";
 import { CleanupPathsInputSchema, CleanupPathsResultSchema } from "../src/contracts/cleanup.contract.js";
-import { CodexReviewInputSchema, CodexReviewResultSchema, CodexTaskInputSchema, CodexTaskResultSchema, CodexTaskWriteInputSchema, CodexTaskWriteResultSchema } from "../src/contracts/codex-task.contract.js";
+import { CodexReviewInputSchema, CodexReviewResultSchema } from "../src/contracts/codex-task.contract.js";
+import { CodexReviewWriteInputSchema, CodexReviewWriteResultSchema } from "../src/contracts/codex-review-attestation.contract.js";
+import {
+  DelegationPreparedResultV3Schema,
+  DelegationTaskV3ToolInputSchema,
+  DelegationTaskV3WriteToolInputSchema,
+  DelegationWriteResultV3Schema
+} from "../src/contracts/delegation-v3.contract.js";
 import { DecisionLogInputSchema, DecisionLogResultSchema } from "../src/contracts/decision.contract.js";
 import { GitReviewResultSchema } from "../src/contracts/git-review.contract.js";
 import { HandoffInputSchema, HandoffResultSchema } from "../src/contracts/handoff.contract.js";
 import { LastWriteInputSchema, LastWriteResultSchema } from "../src/contracts/operation-receipt.contract.js";
+import { OperationLedgerInputSchema, OperationLedgerResultSchema } from "../src/contracts/operation-ledger.contract.js";
 import { PolicyExplainInputSchema, PolicyExplainResultSchema } from "../src/contracts/policy.contract.js";
+import { ContextMapInputSchema, ContextMapResultSchema } from "../src/contracts/context-map.contract.js";
+import { SymbolContextInputSchema, SymbolContextResultSchema } from "../src/contracts/symbol-context.contract.js";
+import { FailureDiagnoseInputSchema, FailureDiagnoseResultSchema } from "../src/contracts/failure-diagnose.contract.js";
+import { SemanticReviewInputSchema, SemanticReviewResultSchema } from "../src/contracts/semantic-review.contract.js";
+import { ShipReviewInputSchema, ShipReviewResultSchema, ShipReviewToolInputSchema } from "../src/contracts/ship-review.contract.js";
+import { PatchsetApplyInputSchema, PatchsetApplyResultSchema, PatchsetPrepareInputSchema, PatchsetPrepareResultSchema, PatchsetReviewInputSchema, PatchsetReviewResultSchema, PatchsetRollbackInputSchema, PatchsetRollbackResultSchema } from "../src/contracts/patchset.contract.js";
+import { ValidateInputSchema, ValidateResultSchema } from "../src/contracts/validation.contract.js";
+import { CurrentWorkSessionInputSchema, CurrentWorkSessionResultSchema, StartWorkSessionInputSchema, StartWorkSessionResultSchema, UpdateWorkSessionInputSchema, UpdateWorkSessionResultSchema } from "../src/contracts/work-session.contract.js";
 import { RepoReaderConfigSchema } from "../src/config/schema.js";
-import { readOnlyAnnotations, writeAnnotations } from "../src/tools/annotations.js";
+import { nonDestructiveMutationAnnotations, readOnlyAnnotations, safeMutationAnnotations, writeAnnotations } from "../src/tools/annotations.js";
 import { toolCatalog } from "../src/tools/catalog.js";
+import { CANONICAL_TOOL_ORDER, toolRegistry, toolsForPackage } from "../src/tools/registry.js";
+import * as handlerExports from "../src/tools/handlers.js";
+import type { ToolDefinition } from "../src/tools/catalog.js";
+import type { ToolName } from "../src/tools/contracts.js";
 import { toolContracts } from "../src/tools/contracts.js";
 import { MUTATING_TOOL_NAMES, isMutatingToolName } from "../src/tools/mutating-tools.js";
 import { createAuditEvent } from "../src/runtime/telemetry.js";
@@ -51,17 +73,21 @@ describe("tool catalog contracts", () => {
       "repo_list_roots",
       "repo_policy_explain",
       "repo_last_write",
+      "repo_operation_ledger",
       "repo_tree",
       "repo_search",
       "repo_fetch_file",
       "repo_read_many",
+      "repo_context_map",
+      "repo_symbol_context",
+      "repo_code_index",
+      "repo_failure_diagnose",
+      "repo_semantic_review",
+      "repo_ship_review",
       "repo_git_status",
       "repo_git_diff",
       "repo_git_review",
-      "repo_git_stage",
-      "repo_git_unstage",
       "repo_git_restore_paths",
-      "repo_git_commit",
       "repo_write_stage",
       "repo_write_unstage",
       "repo_write_commit",
@@ -72,11 +98,21 @@ describe("tool catalog contracts", () => {
       "repo_task_inventory",
       "repo_decision_memory",
       "repo_change_plan",
-      "repo_next_action",
-      "repo_plan_review",
       "repo_prepare_codex_task",
       "repo_write_codex_task",
+      "repo_agent_runs",
+      "repo_write_agent_reply",
       "repo_codex_review",
+      "repo_write_codex_review",
+      "repo_write_integration_review",
+      "repo_prepare_patchset",
+      "repo_apply_patchset",
+      "repo_review_patchset",
+      "repo_rollback_patchset",
+      "repo_validate",
+      "repo_start_work_session",
+      "repo_update_work_session",
+      "repo_current_work_session",
       "repo_write_file",
       "repo_write_changes",
       "repo_write_handoff"
@@ -88,7 +124,13 @@ describe("tool catalog contracts", () => {
       expect(tool.inputSchema).toBeDefined();
       expect(tool.outputSchema).toBeDefined();
       if (isMutatingToolName(tool.name)) {
-        expect(tool.annotations).toEqual(writeAnnotations);
+        expect(tool.annotations).toEqual(
+          tool.name === "repo_code_index"
+            ? safeMutationAnnotations
+            : tool.name === "repo_prepare_patchset"
+              ? nonDestructiveMutationAnnotations
+              : writeAnnotations
+        );
       } else {
         expect(tool.annotations).toEqual(readOnlyAnnotations);
       }
@@ -96,51 +138,109 @@ describe("tool catalog contracts", () => {
     }
   });
 
+  test("connector metadata stays materially smaller and contrastive", () => {
+    const instructionSourceBytes = readFileSync("src/instructions.ts").byteLength;
+    const descriptionSourceBytes = readFileSync("src/tools/descriptions.ts").byteLength;
+    const descriptionPayloadBytes = Buffer.byteLength(toolCatalog.map((tool) => tool.description).join(" "), "utf8");
+
+    expect(instructionSourceBytes).toBeLessThan(6_000);
+    expect(descriptionSourceBytes).toBeLessThan(8_500);
+    expect(descriptionPayloadBytes).toBeLessThan(7_500);
+    expect(instructionSourceBytes).toBeLessThan(Math.floor(15_644 * 0.4));
+    expect(descriptionSourceBytes).toBeLessThan(Math.floor(16_819 * 0.5));
+
+    const description = (name: string) => toolCatalog.find((tool) => tool.name === name)?.description ?? "";
+    expect(description("repo_context_map")).toContain("file-level impact");
+    expect(description("repo_context_map")).toContain("repo_symbol_context");
+    expect(description("repo_symbol_context")).toContain("symbol-level evidence");
+    expect(description("repo_git_diff")).toContain("raw Git diff");
+    expect(description("repo_git_review")).toContain("planning commit and recovery");
+    expect(description("repo_ship_review")).toContain("combined final readiness");
+    expect(description("repo_write_stage")).toContain("separately");
+    expect(description("repo_write_stage_commit")).toContain("canonical stage-and-commit payload");
+    expect(description("repo_prepare_codex_task")).toContain("previewing");
+    expect(description("repo_write_codex_task")).toContain("durable Codex");
+  });
+
   test("mutating tools use central contracts and annotations", () => {
     expect(MUTATING_TOOL_NAMES).toEqual([
-      "repo_write_file",
-      "repo_write_changes",
-      "repo_write_handoff",
-      "repo_write_codex_task",
-      "repo_git_stage",
-      "repo_git_unstage",
+      "repo_code_index",
       "repo_git_restore_paths",
-      "repo_git_commit",
       "repo_write_stage",
       "repo_write_unstage",
       "repo_write_commit",
       "repo_write_stage_commit",
       "repo_write_recover",
-      "repo_cleanup_paths"
+      "repo_cleanup_paths",
+      "repo_write_codex_task",
+      "repo_write_agent_reply",
+      "repo_write_codex_review",
+      "repo_write_integration_review",
+      "repo_prepare_patchset",
+      "repo_apply_patchset",
+      "repo_rollback_patchset",
+      "repo_validate",
+      "repo_start_work_session",
+      "repo_update_work_session",
+      "repo_write_file",
+      "repo_write_changes",
+      "repo_write_handoff"
     ]);
+    expect(MUTATING_TOOL_NAMES).toEqual(toolCatalog
+      .filter((tool) => tool.annotations.readOnlyHint === false)
+      .map((tool) => tool.name));
     const writeFile = toolCatalog.find((tool) => tool.name === "repo_write_file");
     const policyExplain = toolCatalog.find((tool) => tool.name === "repo_policy_explain");
     const prepareCodexTask = toolCatalog.find((tool) => tool.name === "repo_prepare_codex_task");
     const writeCodexTask = toolCatalog.find((tool) => tool.name === "repo_write_codex_task");
+    const agentRuns = toolCatalog.find((tool) => tool.name === "repo_agent_runs");
+    const writeAgentReply = toolCatalog.find((tool) => tool.name === "repo_write_agent_reply");
     const codexReview = toolCatalog.find((tool) => tool.name === "repo_codex_review");
+    const writeCodexReview = toolCatalog.find((tool) => tool.name === "repo_write_codex_review");
     const writeChanges = toolCatalog.find((tool) => tool.name === "repo_write_changes");
     const writeHandoff = toolCatalog.find((tool) => tool.name === "repo_write_handoff");
     const stageCommit = toolCatalog.find((tool) => tool.name === "repo_write_stage_commit");
     const recover = toolCatalog.find((tool) => tool.name === "repo_write_recover");
+    const validate = toolCatalog.find((tool) => tool.name === "repo_validate");
+    const startWorkSession = toolCatalog.find((tool) => tool.name === "repo_start_work_session");
+    const updateWorkSession = toolCatalog.find((tool) => tool.name === "repo_update_work_session");
+    const currentWorkSession = toolCatalog.find((tool) => tool.name === "repo_current_work_session");
     const lastWrite = toolCatalog.find((tool) => tool.name === "repo_last_write");
     const decisionMemory = toolCatalog.find((tool) => tool.name === "repo_decision_memory");
+    const contextMap = toolCatalog.find((tool) => tool.name === "repo_context_map");
+    const symbolContext = toolCatalog.find((tool) => tool.name === "repo_symbol_context");
+    const failureDiagnose = toolCatalog.find((tool) => tool.name === "repo_failure_diagnose");
+    const semanticReview = toolCatalog.find((tool) => tool.name === "repo_semantic_review");
+    const shipReview = toolCatalog.find((tool) => tool.name === "repo_ship_review");
 
     expect(policyExplain).toBeDefined();
     expect(policyExplain?.inputSchema).toBe(PolicyExplainInputSchema);
     expect(policyExplain?.outputSchema).toBe(PolicyExplainResultSchema);
     expect(policyExplain?.annotations).toEqual(readOnlyAnnotations);
     expect(prepareCodexTask).toBeDefined();
-    expect(prepareCodexTask?.inputSchema).toBe(CodexTaskInputSchema);
-    expect(prepareCodexTask?.outputSchema).toBe(CodexTaskResultSchema);
+    expect(prepareCodexTask?.inputSchema).toBe(DelegationTaskV3ToolInputSchema);
+    expect(prepareCodexTask?.outputSchema).toBe(DelegationPreparedResultV3Schema);
     expect(prepareCodexTask?.annotations).toEqual(readOnlyAnnotations);
     expect(writeCodexTask).toBeDefined();
-    expect(writeCodexTask?.inputSchema).toBe(CodexTaskWriteInputSchema);
-    expect(writeCodexTask?.outputSchema).toBe(CodexTaskWriteResultSchema);
+    expect(writeCodexTask?.inputSchema).toBe(DelegationTaskV3WriteToolInputSchema);
+    expect(writeCodexTask?.outputSchema).toBe(DelegationWriteResultV3Schema);
     expect(writeCodexTask?.annotations).toEqual(writeAnnotations);
+    expect(agentRuns).toBeDefined();
+    expect(agentRuns?.inputSchema).toBe(AgentRunsInputSchema);
+    expect(agentRuns?.outputSchema).toBe(AgentRunsResultSchema);
+    expect(agentRuns?.annotations).toEqual(readOnlyAnnotations);
+    expect(writeAgentReply).toBeDefined();
+    expect(writeAgentReply?.inputSchema).toBe(AgentReplyInputSchema);
+    expect(writeAgentReply?.outputSchema).toBe(AgentReplyResultSchema);
+    expect(writeAgentReply?.annotations).toEqual(writeAnnotations);
     expect(codexReview).toBeDefined();
     expect(codexReview?.inputSchema).toBe(CodexReviewInputSchema);
     expect(codexReview?.outputSchema).toBe(CodexReviewResultSchema);
     expect(codexReview?.annotations).toEqual(readOnlyAnnotations);
+    expect(writeCodexReview).toBeDefined();
+    expect(writeCodexReview?.inputSchema).toBe(CodexReviewWriteInputSchema);
+    expect(writeCodexReview?.outputSchema).toBe(CodexReviewWriteResultSchema);
+    expect(writeCodexReview?.annotations).toEqual(writeAnnotations);
     expect(lastWrite).toBeDefined();
     expect(lastWrite?.inputSchema).toBe(LastWriteInputSchema);
     expect(lastWrite?.outputSchema).toBe(LastWriteResultSchema);
@@ -149,8 +249,35 @@ describe("tool catalog contracts", () => {
     expect(decisionMemory?.inputSchema).toBe(DecisionLogInputSchema);
     expect(decisionMemory?.outputSchema).toBe(DecisionLogResultSchema);
     expect(decisionMemory?.annotations).toEqual(readOnlyAnnotations);
+    expect(contextMap).toBeDefined();
+    expect(contextMap?.inputSchema).toBe(ContextMapInputSchema);
+    expect(contextMap?.outputSchema).toBe(ContextMapResultSchema);
+    expect(contextMap?.annotations).toEqual(readOnlyAnnotations);
+    expect(symbolContext).toBeDefined();
+    expect(symbolContext?.inputSchema).toBe(SymbolContextInputSchema);
+    expect(symbolContext?.outputSchema).toBe(SymbolContextResultSchema);
+    expect(symbolContext?.annotations).toEqual(readOnlyAnnotations);
+    expect(failureDiagnose).toBeDefined();
+    expect(failureDiagnose?.inputSchema).toBe(FailureDiagnoseInputSchema);
+    expect(failureDiagnose?.outputSchema).toBe(FailureDiagnoseResultSchema);
+    expect(failureDiagnose?.annotations).toEqual(readOnlyAnnotations);
+    expect(semanticReview).toBeDefined();
+    expect(semanticReview?.inputSchema).toBe(SemanticReviewInputSchema);
+    expect(semanticReview?.outputSchema).toBe(SemanticReviewResultSchema);
+    expect(semanticReview?.annotations).toEqual(readOnlyAnnotations);
+    expect(shipReview).toBeDefined();
+    expect(ShipReviewInputSchema).toBe(SemanticReviewInputSchema);
+    expect(shipReview?.inputSchema).toBe(ShipReviewToolInputSchema);
+    expect(shipReview?.outputSchema).toBe(ShipReviewResultSchema);
+    expect(shipReview?.annotations).toEqual(readOnlyAnnotations);
     expect(toolCatalog.some((tool) => (tool.name as string) === "repo_decision_log")).toBe(false);
     expect((toolContracts as Record<string, unknown>).repo_decision_log).toBeUndefined();
+    expect(toolCatalog.some((tool) => (tool.name as string) === "repo_plan_review")).toBe(false);
+    expect((toolContracts as Record<string, unknown>).repo_plan_review).toBeUndefined();
+    for (const removedTool of ["repo_git_stage", "repo_git_unstage", "repo_git_commit", "repo_next_action"]) {
+      expect(toolCatalog.some((tool) => (tool.name as string) === removedTool)).toBe(false);
+      expect((toolContracts as Record<string, unknown>)[removedTool]).toBeUndefined();
+    }
     expect(writeFile).toBeDefined();
     expect(writeFile?.inputSchema).toBe(WriteFileInputSchema);
     expect(writeFile?.outputSchema).toBe(WriteFileResultSchema);
@@ -171,20 +298,148 @@ describe("tool catalog contracts", () => {
     expect(recover?.inputSchema).toBe(GitRecoverInputSchema);
     expect(recover?.outputSchema).toBe(GitRecoverResultSchema);
     expect(recover?.annotations).toEqual(writeAnnotations);
+    expect(validate).toBeDefined();
+    expect(validate?.inputSchema).toBe(ValidateInputSchema);
+    expect(validate?.outputSchema).toBe(ValidateResultSchema);
+    expect(validate?.annotations).toEqual(writeAnnotations);
+    expect(startWorkSession).toBeDefined();
+    expect(startWorkSession?.inputSchema).toBe(StartWorkSessionInputSchema);
+    expect(startWorkSession?.outputSchema).toBe(StartWorkSessionResultSchema);
+    expect(startWorkSession?.annotations).toEqual(writeAnnotations);
+    expect(updateWorkSession).toBeDefined();
+    expect(updateWorkSession?.inputSchema).toBe(UpdateWorkSessionInputSchema);
+    expect(updateWorkSession?.outputSchema).toBe(UpdateWorkSessionResultSchema);
+    expect(updateWorkSession?.annotations).toEqual(writeAnnotations);
+    expect(currentWorkSession).toBeDefined();
+    expect(currentWorkSession?.inputSchema).toBe(CurrentWorkSessionInputSchema);
+    expect(currentWorkSession?.outputSchema).toBe(CurrentWorkSessionResultSchema);
+    expect(currentWorkSession?.annotations).toEqual(readOnlyAnnotations);
     const restorePaths = toolCatalog.find((tool) => tool.name === "repo_git_restore_paths");
     expect(restorePaths).toBeDefined();
     expect(restorePaths?.inputSchema).toBe(GitRestorePathsInputSchema);
     expect(restorePaths?.outputSchema).toBe(GitRestorePathsResultSchema);
     expect(restorePaths?.annotations).toEqual(writeAnnotations);
 
-    expect(toolContracts.repo_write_stage.input).toBe(toolContracts.repo_git_stage.input);
-    expect(toolContracts.repo_write_stage.output).toBe(toolContracts.repo_git_stage.output);
-    expect(toolContracts.repo_write_unstage.input).toBe(toolContracts.repo_git_unstage.input);
-    expect(toolContracts.repo_write_unstage.output).toBe(toolContracts.repo_git_unstage.output);
-    expect(toolContracts.repo_write_commit.input).toBe(toolContracts.repo_git_commit.input);
-    expect(toolContracts.repo_write_commit.output).toBe(toolContracts.repo_git_commit.output);
     expect(isMutatingToolName("repo_git_review")).toBe(false);
     expect(isMutatingToolName("repo_last_write")).toBe(false);
+  });
+
+  test("internal registry composes exact packages without changing the canonical surface", () => {
+    expect(toolRegistry).toBe(toolCatalog);
+    expect(toolRegistry.map((tool) => tool.name)).toEqual(CANONICAL_TOOL_ORDER);
+    expect(new Set(CANONICAL_TOOL_ORDER).size).toBe(46);
+    expect([...CANONICAL_TOOL_ORDER].sort()).toEqual(Object.keys(toolContracts).sort());
+
+    expect(toolsForPackage("developer").map((tool) => tool.name)).toEqual([
+      "repo_list_roots",
+      "repo_policy_explain",
+      "repo_last_write",
+      "repo_tree",
+      "repo_search",
+      "repo_fetch_file",
+      "repo_read_many",
+      "repo_context_map",
+      "repo_symbol_context",
+      "repo_ship_review",
+      "repo_git_status",
+      "repo_git_diff",
+      "repo_git_review",
+      "repo_write_stage_commit",
+      "repo_write_recover",
+      "repo_project_brief",
+      "repo_change_plan",
+      "repo_validate",
+      "repo_start_work_session",
+      "repo_update_work_session",
+      "repo_current_work_session",
+      "repo_write_file",
+      "repo_write_changes",
+      "repo_write_handoff"
+    ]);
+    expect(toolsForPackage("delegation")).toHaveLength(7);
+    expect(toolsForPackage("patchsets")).toHaveLength(4);
+    expect(toolsForPackage("advanced_operations")).toHaveLength(6);
+    expect(toolsForPackage("diagnostics_and_discovery")).toHaveLength(4);
+    expect(toolsForPackage("code_index")).toHaveLength(1);
+
+    for (const tool of toolRegistry) {
+      expect(tool.tier).toBe(tool.package === "developer" ? "default" : "specialist");
+      expect(tool.requiredCapabilities).toEqual(tool.name === "repo_code_index" ? ["code_intelligence"] : []);
+    }
+  });
+
+  test("public delegation tools accept v3 tasks and reject removed v2 creation fields", () => {
+    const common = {
+      repo_id: "fixture",
+      title: "Product-grounded delegation",
+      assignment: "Create a coherent outcome without prescribing every internal implementation step.",
+      outcome: {
+        beneficiary: "Repository operator",
+        current_problem: "Repeated technical tasks can lose the intended product outcome.",
+        desired_outcome: "The implementation remains product-aware and complete.",
+        why_now: "New task creation is being cut over to Delegation v3."
+      },
+      starting_points: ["src/**"],
+      authorization_scope: ["src/**", "tests/**"],
+      forbidden_paths: [],
+      hard_constraints: ["Preserve repository safety boundaries."],
+      must_preserve: ["Historical v1 and v2 runs remain reviewable."],
+      explicit_exclusions: ["Do not add arbitrary shell execution."],
+      technical_acceptance_criteria: ["Typecheck and tests pass."],
+      runner: { mode: "manual" as const }
+    };
+
+    expect(DelegationTaskV3ToolInputSchema.safeParse({
+      ...common,
+      task_kind: "product_slice",
+      product_alignment: {
+        primary_user_id: "repo-operator",
+        job_ids: ["delegate-coherent-work"],
+        user_problem: "The operator must repeatedly supervise implementation details.",
+        product_goal: "Preserve product intent while delegating coherent work.",
+        additional_must_not_become: [],
+        product_acceptance_criteria: ["The user and product outcome remain explicit."]
+      }
+    }).success).toBe(true);
+    expect(DelegationTaskV3ToolInputSchema.safeParse({
+      ...common,
+      task_kind: "technical_infrastructure",
+      technical_context: { enabling_value: "Give delegation services one product-aware contract." }
+    }).success).toBe(true);
+    expect(DelegationTaskV3ToolInputSchema.safeParse({
+      ...common,
+      task_kind: "security_or_migration",
+      security_context: {
+        protected_contract: "Prompt and manifest identity remain bound.",
+        failure_risk: "A compatibility fallback could write an unsafe task."
+      }
+    }).success).toBe(true);
+
+    for (const legacy of [
+      { objective: "legacy" },
+      { context_summary: "legacy" },
+      { inspect_first: ["src/app.ts"] },
+      { allowed_paths: ["src/**"] },
+      { implementation_scope: { include: ["legacy"] } },
+      { acceptance_criteria: ["legacy"] },
+      { verification_commands: ["npm test"] },
+      { parent_run_id: "2026-01-01T000000Z-parent" },
+      { include_prompt: true }
+    ]) {
+      expect(DelegationTaskV3WriteToolInputSchema.safeParse({
+        ...common,
+        task_kind: "technical_infrastructure",
+        technical_context: { enabling_value: "Enable coherent delegation." },
+        ...legacy
+      }).success).toBe(false);
+    }
+  });
+
+  test("v3 task service does not import legacy task or renderer implementations", () => {
+    const source = readFileSync("src/services/delegation-v3-task-service.ts", "utf8");
+    expect(source).not.toContain("codex-task-service");
+    expect(source).not.toContain("codex-task-renderer");
+    expect(source).not.toContain("legacy/codex-v2");
   });
 
   test("handoff intent is routed to repo_write_handoff description only", () => {
@@ -217,8 +472,10 @@ describe("tool catalog contracts", () => {
 
     expect(reviewTool?.annotations).toEqual(readOnlyAnnotations);
     expect(Object.keys(reviewTool?.inputSchema.shape ?? {}).sort()).toEqual([
+      "detail",
       "max_files",
       "mode",
+      "paths",
       "repo_id"
     ]);
   });
@@ -250,6 +507,15 @@ describe("tool catalog contracts", () => {
       ["repo_last_write.receipt", LastWriteResultSchema.shape.receipt],
       ["repo_last_write.next_tool_payloads", LastWriteResultSchema.shape.next_tool_payloads],
       ["repo_last_write.warnings", LastWriteResultSchema.shape.warnings],
+      ["repo_operation_ledger.repo_id", OperationLedgerInputSchema.shape.repo_id],
+      ["repo_operation_ledger.limit", OperationLedgerInputSchema.shape.limit],
+      ["repo_operation_ledger.cursor", OperationLedgerInputSchema.shape.cursor],
+      ["repo_operation_ledger.after_operation_id", OperationLedgerInputSchema.shape.after_operation_id],
+      ["repo_operation_ledger.ok", OperationLedgerResultSchema.shape.ok],
+      ["repo_operation_ledger.repo_id", OperationLedgerResultSchema.shape.repo_id],
+      ["repo_operation_ledger.events", OperationLedgerResultSchema.shape.events],
+      ["repo_operation_ledger.next_cursor", OperationLedgerResultSchema.shape.next_cursor],
+      ["repo_operation_ledger.warnings", OperationLedgerResultSchema.shape.warnings],
       ["repo_write_file.repo_id", WriteFileInputSchema.shape.repo_id],
       ["repo_write_file.path", WriteFileInputSchema.shape.path],
       ["repo_write_file.action", WriteFileInputSchema.shape.action],
@@ -258,6 +524,9 @@ describe("tool catalog contracts", () => {
       ["repo_write_file.replace", WriteFileInputSchema.shape.replace],
       ["repo_write_file.create_dirs", WriteFileInputSchema.shape.create_dirs],
       ["repo_write_file.dry_run", WriteFileInputSchema.shape.dry_run],
+      ["repo_write_file.expected_old_sha256", WriteFileInputSchema.shape.expected_old_sha256],
+      ["repo_write_file.expected_missing", WriteFileInputSchema.shape.expected_missing],
+      ["repo_write_file.expected_head_sha", WriteFileInputSchema.shape.expected_head_sha],
       ["repo_write_file.reason", WriteFileInputSchema.shape.reason],
       ["repo_write_file.ok", WriteFileResultSchema.shape.ok],
       ["repo_write_file.path", WriteFileResultSchema.shape.path],
@@ -274,9 +543,68 @@ describe("tool catalog contracts", () => {
     ]);
 
     expectFieldDescriptions([
+      ["repo_prepare_patchset.repo_id", PatchsetPrepareInputSchema.shape.repo_id],
+      ["repo_prepare_patchset.intent", PatchsetPrepareInputSchema.shape.intent],
+      ["repo_prepare_patchset.base_head_sha", PatchsetPrepareInputSchema.shape.base_head_sha],
+      ["repo_prepare_patchset.files", PatchsetPrepareInputSchema.shape.files],
+      ["repo_prepare_patchset.ok", PatchsetPrepareResultSchema.shape.ok],
+      ["repo_prepare_patchset.patchset_id", PatchsetPrepareResultSchema.shape.patchset_id],
+      ["repo_prepare_patchset.manifest_path", PatchsetPrepareResultSchema.shape.manifest_path],
+      ["repo_apply_patchset.repo_id", PatchsetApplyInputSchema.shape.repo_id],
+      ["repo_apply_patchset.patchset_id", PatchsetApplyInputSchema.shape.patchset_id],
+      ["repo_apply_patchset.expected_head_sha", PatchsetApplyInputSchema.shape.expected_head_sha],
+      ["repo_apply_patchset.ok", PatchsetApplyResultSchema.shape.ok],
+      ["repo_apply_patchset.operation_id", PatchsetApplyResultSchema.shape.operation_id],
+      ["repo_review_patchset.repo_id", PatchsetReviewInputSchema.shape.repo_id],
+      ["repo_review_patchset.patchset_id", PatchsetReviewInputSchema.shape.patchset_id],
+      ["repo_review_patchset.ok", PatchsetReviewResultSchema.shape.ok],
+      ["repo_review_patchset.git_review", PatchsetReviewResultSchema.shape.git_review],
+      ["repo_review_patchset.rolled_back", PatchsetReviewResultSchema.shape.rolled_back],
+      ["repo_rollback_patchset.repo_id", PatchsetRollbackInputSchema.shape.repo_id],
+      ["repo_rollback_patchset.patchset_id", PatchsetRollbackInputSchema.shape.patchset_id],
+      ["repo_rollback_patchset.expected_head_sha", PatchsetRollbackInputSchema.shape.expected_head_sha],
+      ["repo_rollback_patchset.dry_run", PatchsetRollbackInputSchema.shape.dry_run],
+      ["repo_rollback_patchset.ok", PatchsetRollbackResultSchema.shape.ok],
+      ["repo_rollback_patchset.restored_paths", PatchsetRollbackResultSchema.shape.restored_paths],
+      ["repo_rollback_patchset.deleted_paths", PatchsetRollbackResultSchema.shape.deleted_paths],
+      ["repo_rollback_patchset.operation_receipt", PatchsetRollbackResultSchema.shape.operation_receipt],
+      ["repo_validate.repo_id", ValidateInputSchema.shape.repo_id],
+      ["repo_validate.profile", ValidateInputSchema.shape.profile],
+      ["repo_validate.dry_run", ValidateInputSchema.shape.dry_run],
+      ["repo_validate.timeout_ms", ValidateInputSchema.shape.timeout_ms],
+      ["repo_validate.ok", ValidateResultSchema.shape.ok],
+      ["repo_validate.status", ValidateResultSchema.shape.status],
+      ["repo_validate.commands", ValidateResultSchema.shape.commands],
+      ["repo_validate.counts", ValidateResultSchema.shape.counts],
+      ["repo_validate.warnings", ValidateResultSchema.shape.warnings],
+      ["repo_start_work_session.repo_id", StartWorkSessionInputSchema.shape.repo_id],
+      ["repo_start_work_session.title", StartWorkSessionInputSchema.shape.title],
+      ["repo_start_work_session.objective", StartWorkSessionInputSchema.shape.objective],
+      ["repo_start_work_session.next_action", StartWorkSessionInputSchema.shape.next_action],
+      ["repo_start_work_session.dry_run", StartWorkSessionInputSchema.shape.dry_run],
+      ["repo_start_work_session.ok", StartWorkSessionResultSchema.shape.ok],
+      ["repo_start_work_session.session", StartWorkSessionResultSchema.shape.session],
+      ["repo_start_work_session.next_tool_payloads", StartWorkSessionResultSchema.shape.next_tool_payloads],
+      ["repo_update_work_session.repo_id", UpdateWorkSessionInputSchema.shape.repo_id],
+      ["repo_update_work_session.work_session_id", UpdateWorkSessionInputSchema.shape.work_session_id],
+      ["repo_update_work_session.next_action", UpdateWorkSessionInputSchema.shape.next_action],
+      ["repo_update_work_session.ok", UpdateWorkSessionResultSchema.shape.ok],
+      ["repo_update_work_session.session", UpdateWorkSessionResultSchema.shape.session],
+      ["repo_current_work_session.repo_id", CurrentWorkSessionInputSchema.shape.repo_id],
+      ["repo_current_work_session.work_session_id", CurrentWorkSessionInputSchema.shape.work_session_id],
+      ["repo_current_work_session.ok", CurrentWorkSessionResultSchema.shape.ok],
+      ["repo_current_work_session.lookup_source", CurrentWorkSessionResultSchema.shape.lookup_source],
+      ["repo_current_work_session.found", CurrentWorkSessionResultSchema.shape.found],
+      ["repo_current_work_session.continuity_state", CurrentWorkSessionResultSchema.shape.continuity_state],
+      ["repo_current_work_session.session", CurrentWorkSessionResultSchema.shape.session],
+      ["repo_current_work_session.warnings", CurrentWorkSessionResultSchema.shape.warnings]
+    ]);
+
+    expectFieldDescriptions([
       ["repo_write_changes.repo_id", WriteChangesInputSchema.shape.repo_id],
       ["repo_write_changes.changes", WriteChangesInputSchema.shape.changes],
       ["repo_write_changes.dry_run", WriteChangesInputSchema.shape.dry_run],
+      ["repo_write_changes.expected_head_sha", WriteChangesInputSchema.shape.expected_head_sha],
       ["repo_write_changes.reason", WriteChangesInputSchema.shape.reason],
       ["repo_write_changes.ok", WriteChangesResultSchema.shape.ok],
       ["repo_write_changes.dry_run", WriteChangesResultSchema.shape.dry_run],
@@ -331,35 +659,35 @@ describe("tool catalog contracts", () => {
     ]);
 
     expectFieldDescriptions([
-      ["repo_git_stage.repo_id", GitStageInputSchema.shape.repo_id],
-      ["repo_git_stage.paths", GitStageInputSchema.shape.paths],
-      ["repo_git_stage.expected_head_sha", GitStageInputSchema.shape.expected_head_sha],
-      ["repo_git_stage.dry_run", GitStageInputSchema.shape.dry_run],
-      ["repo_git_stage.reason", GitStageInputSchema.shape.reason],
-      ["repo_git_stage.ok", GitStageResultSchema.shape.ok],
-      ["repo_git_stage.dry_run", GitStageResultSchema.shape.dry_run],
-      ["repo_git_stage.head_sha", GitStageResultSchema.shape.head_sha],
-      ["repo_git_stage.staged_paths", GitStageResultSchema.shape.staged_paths],
-      ["repo_git_stage.skipped", GitStageResultSchema.shape.skipped],
-      ["repo_git_stage.skipped.path", GitStageResultSchema.shape.skipped.element.shape.path],
-      ["repo_git_stage.skipped.reason", GitStageResultSchema.shape.skipped.element.shape.reason],
-      ["repo_git_stage.warnings", GitStageResultSchema.shape.warnings]
+      ["repo_write_stage.repo_id", GitStageInputSchema.shape.repo_id],
+      ["repo_write_stage.paths", GitStageInputSchema.shape.paths],
+      ["repo_write_stage.expected_head_sha", GitStageInputSchema.shape.expected_head_sha],
+      ["repo_write_stage.dry_run", GitStageInputSchema.shape.dry_run],
+      ["repo_write_stage.reason", GitStageInputSchema.shape.reason],
+      ["repo_write_stage.ok", GitStageResultSchema.shape.ok],
+      ["repo_write_stage.dry_run", GitStageResultSchema.shape.dry_run],
+      ["repo_write_stage.head_sha", GitStageResultSchema.shape.head_sha],
+      ["repo_write_stage.staged_paths", GitStageResultSchema.shape.staged_paths],
+      ["repo_write_stage.skipped", GitStageResultSchema.shape.skipped],
+      ["repo_write_stage.skipped.path", GitStageResultSchema.shape.skipped.element.shape.path],
+      ["repo_write_stage.skipped.reason", GitStageResultSchema.shape.skipped.element.shape.reason],
+      ["repo_write_stage.warnings", GitStageResultSchema.shape.warnings]
     ]);
 
     expectFieldDescriptions([
-      ["repo_git_unstage.repo_id", GitUnstageInputSchema.shape.repo_id],
-      ["repo_git_unstage.paths", GitUnstageInputSchema.shape.paths],
-      ["repo_git_unstage.expected_head_sha", GitUnstageInputSchema.shape.expected_head_sha],
-      ["repo_git_unstage.dry_run", GitUnstageInputSchema.shape.dry_run],
-      ["repo_git_unstage.reason", GitUnstageInputSchema.shape.reason],
-      ["repo_git_unstage.ok", GitUnstageResultSchema.shape.ok],
-      ["repo_git_unstage.dry_run", GitUnstageResultSchema.shape.dry_run],
-      ["repo_git_unstage.head_sha", GitUnstageResultSchema.shape.head_sha],
-      ["repo_git_unstage.unstaged_paths", GitUnstageResultSchema.shape.unstaged_paths],
-      ["repo_git_unstage.skipped", GitUnstageResultSchema.shape.skipped],
-      ["repo_git_unstage.skipped.path", GitUnstageResultSchema.shape.skipped.element.shape.path],
-      ["repo_git_unstage.skipped.reason", GitUnstageResultSchema.shape.skipped.element.shape.reason],
-      ["repo_git_unstage.warnings", GitUnstageResultSchema.shape.warnings]
+      ["repo_write_unstage.repo_id", GitUnstageInputSchema.shape.repo_id],
+      ["repo_write_unstage.paths", GitUnstageInputSchema.shape.paths],
+      ["repo_write_unstage.expected_head_sha", GitUnstageInputSchema.shape.expected_head_sha],
+      ["repo_write_unstage.dry_run", GitUnstageInputSchema.shape.dry_run],
+      ["repo_write_unstage.reason", GitUnstageInputSchema.shape.reason],
+      ["repo_write_unstage.ok", GitUnstageResultSchema.shape.ok],
+      ["repo_write_unstage.dry_run", GitUnstageResultSchema.shape.dry_run],
+      ["repo_write_unstage.head_sha", GitUnstageResultSchema.shape.head_sha],
+      ["repo_write_unstage.unstaged_paths", GitUnstageResultSchema.shape.unstaged_paths],
+      ["repo_write_unstage.skipped", GitUnstageResultSchema.shape.skipped],
+      ["repo_write_unstage.skipped.path", GitUnstageResultSchema.shape.skipped.element.shape.path],
+      ["repo_write_unstage.skipped.reason", GitUnstageResultSchema.shape.skipped.element.shape.reason],
+      ["repo_write_unstage.warnings", GitUnstageResultSchema.shape.warnings]
     ]);
 
     expectFieldDescriptions([
@@ -379,19 +707,19 @@ describe("tool catalog contracts", () => {
     ]);
 
     expectFieldDescriptions([
-      ["repo_git_commit.repo_id", GitCommitInputSchema.shape.repo_id],
-      ["repo_git_commit.message", GitCommitInputSchema.shape.message],
-      ["repo_git_commit.expected_head_sha", GitCommitInputSchema.shape.expected_head_sha],
-      ["repo_git_commit.expected_staged_paths", GitCommitInputSchema.shape.expected_staged_paths],
-      ["repo_git_commit.dry_run", GitCommitInputSchema.shape.dry_run],
-      ["repo_git_commit.reason", GitCommitInputSchema.shape.reason],
-      ["repo_git_commit.ok", GitCommitResultSchema.shape.ok],
-      ["repo_git_commit.dry_run", GitCommitResultSchema.shape.dry_run],
-      ["repo_git_commit.head_before", GitCommitResultSchema.shape.head_before],
-      ["repo_git_commit.head_after", GitCommitResultSchema.shape.head_after],
-      ["repo_git_commit.commit_sha", GitCommitResultSchema.shape.commit_sha],
-      ["repo_git_commit.committed_paths", GitCommitResultSchema.shape.committed_paths],
-      ["repo_git_commit.warnings", GitCommitResultSchema.shape.warnings]
+      ["repo_write_commit.repo_id", GitCommitInputSchema.shape.repo_id],
+      ["repo_write_commit.message", GitCommitInputSchema.shape.message],
+      ["repo_write_commit.expected_head_sha", GitCommitInputSchema.shape.expected_head_sha],
+      ["repo_write_commit.expected_staged_paths", GitCommitInputSchema.shape.expected_staged_paths],
+      ["repo_write_commit.dry_run", GitCommitInputSchema.shape.dry_run],
+      ["repo_write_commit.reason", GitCommitInputSchema.shape.reason],
+      ["repo_write_commit.ok", GitCommitResultSchema.shape.ok],
+      ["repo_write_commit.dry_run", GitCommitResultSchema.shape.dry_run],
+      ["repo_write_commit.head_before", GitCommitResultSchema.shape.head_before],
+      ["repo_write_commit.head_after", GitCommitResultSchema.shape.head_after],
+      ["repo_write_commit.commit_sha", GitCommitResultSchema.shape.commit_sha],
+      ["repo_write_commit.committed_paths", GitCommitResultSchema.shape.committed_paths],
+      ["repo_write_commit.warnings", GitCommitResultSchema.shape.warnings]
     ]);
 
     expectFieldDescriptions([
@@ -493,6 +821,7 @@ describe("tool catalog contracts", () => {
   test("repo_git_review schema accepts composite recover payloads", () => {
     const parsed = GitReviewResultSchema.safeParse({
       ok: true,
+      detail: "full",
       branch: "main",
       head_sha: "0".repeat(40),
       clean: false,
@@ -509,6 +838,17 @@ describe("tool catalog contracts", () => {
         suggested_commit_message: "No changes to commit",
         risk_level: "low",
         warnings: []
+      },
+      delegation_gate: {
+        status: "not_applicable",
+        requested_paths: [],
+        applicable_runs: [],
+        blocking_reasons: [],
+        warnings: [],
+        truncated: false
+      },
+      ship_readiness: {
+        validation: { status: "missing" }
       },
       next_tool_payloads: {
         repo_write_recover_dry_run: {
@@ -543,6 +883,7 @@ describe("tool catalog contracts", () => {
           enabled: true,
           git_stage_enabled: true,
           git_commit_enabled: true,
+          validation_enabled: true,
           max_paths_per_operation: 25
         }
       }],
@@ -553,6 +894,7 @@ describe("tool catalog contracts", () => {
       enabled: true,
       git_stage_enabled: true,
       git_commit_enabled: true,
+      validation_enabled: true,
       max_paths_per_operation: 25
     });
 
@@ -577,6 +919,9 @@ describe("tool catalog contracts", () => {
       git_stage_enabled: false,
       git_commit_enabled: false,
       max_paths_per_operation: 50,
+      validation_enabled: false,
+      validation_test_path_globs: [],
+      validation_profiles: {},
       cleanup_enabled: false,
       cleanup_allowed_globs: [
         ".chatgpt/tool-tests/**",
@@ -636,6 +981,46 @@ describe("tool catalog contracts", () => {
     expect(defaultWrites?.denied_globs).not.toContain("**/*credential*");
   });
 
+  test("code intelligence config requires an explicit absolute executable and accepts no command arguments", () => {
+    const valid = RepoReaderConfigSchema.safeParse({
+      repos: [],
+      limits: {},
+      code_intelligence: {
+        provider: "codebase_memory",
+        executable: "/usr/local/bin/codebase-memory-mcp"
+      }
+    });
+    expect(valid.success).toBe(true);
+    expect(valid.data?.code_intelligence).toMatchObject({ query_timeout_ms: 3_000, index_timeout_ms: 1_800_000 });
+
+    expect(RepoReaderConfigSchema.safeParse({
+      repos: [],
+      limits: {},
+      code_intelligence: { provider: "codebase_memory", executable: "codebase-memory-mcp" }
+    }).success).toBe(false);
+    expect(RepoReaderConfigSchema.safeParse({
+      repos: [],
+      limits: {},
+      code_intelligence: {
+        provider: "codebase_memory",
+        executable: "/usr/local/bin/codebase-memory-mcp",
+        args: ["--unsafe"]
+      }
+    }).success).toBe(false);
+    const indexTool = toolCatalog.find((tool) => tool.name === "repo_code_index");
+    expect(indexTool?.inputSchema.safeParse({ repo_id: "fixture", action: "status" }).success).toBe(true);
+    expect(indexTool?.inputSchema.safeParse({ repo_id: "fixture", action: "start", path: "/tmp/other" }).success).toBe(false);
+    expect(indexTool?.description).toContain("explicitly ask the user");
+  });
+
+  test("code intelligence transport has no shell or client-controlled command surface", () => {
+    const source = readFileSync("src/services/codebase-memory-client.ts", "utf8");
+    expect(source).toContain("new StdioClientTransport");
+    expect(source).toContain("args: []");
+    expect(source).not.toMatch(/exec\s*\(|execSync\s*\(|shell\s*:\s*true/);
+    expect(toolContracts.repo_code_index.input.keyof().options.sort()).toEqual(["action", "repo_id"]);
+  });
+
   test("config example is a valid empty starter config", () => {
     const raw = readFileSync("config.example.json", "utf8");
     const example = JSON.parse(raw) as { repos?: unknown[]; limits?: Record<string, unknown> };
@@ -692,7 +1077,7 @@ describe("tool catalog contracts", () => {
     const gitDiff = toolCatalog.find((tool) => tool.name === "repo_git_diff");
 
     expect(gitDiff?.description).toContain("Default first call should pass only repo_id");
-    expect(gitDiff?.description).toContain("Do not include staged, unstaged, paths, max_bytes, or context_lines on the first pass");
+    expect(gitDiff?.description).toContain("add filters only for a second pass");
     expect(schemaDescription(gitDiff!.inputSchema.shape.max_bytes)).toContain("Second-pass refinement");
     expect(schemaDescription(gitDiff!.inputSchema.shape.context_lines)).toContain("Omit on the first diff call");
   });
@@ -705,6 +1090,61 @@ describe("tool catalog contracts", () => {
       expect(tool.inputSchema).toBe(contract.input);
       expect(tool.outputSchema).toBe(contract.output);
     }
+  });
+
+  test("critical workflow surfaces have reviewable contract summaries", () => {
+    expect(contractSummaries([
+      "repo_git_review",
+      "repo_write_stage_commit",
+      "repo_write_recover",
+      "repo_prepare_patchset",
+      "repo_apply_patchset",
+      "repo_rollback_patchset",
+      "repo_validate"
+    ])).toEqual([
+      {
+        name: "repo_git_review",
+        mutating: false,
+        inputKeys: ["detail", "max_files", "mode", "paths", "repo_id"],
+        outputKeys: ["branch", "changed_paths", "clean", "delegation_gate", "detail", "diff_summary", "head_sha", "next_tool_payloads", "ok", "recommendation", "ship_readiness"]
+      },
+      {
+        name: "repo_write_stage_commit",
+        mutating: true,
+        inputKeys: ["dry_run", "expected_head_sha", "message", "paths", "reason", "repo_id", "review_pathset_id"],
+        outputKeys: ["clean_after", "commit_sha", "committed_paths", "dry_run", "head_after", "head_before", "ok", "remaining_changes", "review_pathset_id", "staged_paths", "warnings"]
+      },
+      {
+        name: "repo_write_recover",
+        mutating: true,
+        inputKeys: ["cleanup_paths", "discard_paths", "dry_run", "expected_head_sha", "reason", "repo_id", "restore_paths", "unstage_paths"],
+        outputKeys: ["clean_after", "deleted", "discarded", "dry_run", "head_sha", "ok", "remaining_changes", "restored_paths", "skipped", "unstaged_paths", "warnings"]
+      },
+      {
+        name: "repo_prepare_patchset",
+        mutating: true,
+        inputKeys: ["base_head_sha", "files", "intent", "repo_id", "work_session_id"],
+        outputKeys: ["affected_paths", "manifest", "manifest_path", "next_tool_payloads", "ok", "patchset_id", "warnings"]
+      },
+      {
+        name: "repo_apply_patchset",
+        mutating: true,
+        inputKeys: ["dry_run", "expected_head_sha", "patchset_id", "repo_id"],
+        outputKeys: ["changed_paths", "counts", "created_paths", "deleted_paths", "dry_run", "hunk_diagnostics", "modified_paths", "next_tool_payloads", "ok", "operation_id", "operation_receipt", "patchset_id", "renamed_paths", "rollback_hint", "warnings"]
+      },
+      {
+        name: "repo_rollback_patchset",
+        mutating: true,
+        inputKeys: ["dry_run", "expected_head_sha", "patchset_id", "repo_id"],
+        outputKeys: ["counts", "deleted_paths", "dry_run", "next_tool_payloads", "ok", "operation_id", "operation_receipt", "patchset_id", "restored_paths", "skipped", "warnings"]
+      },
+      {
+        name: "repo_validate",
+        mutating: true,
+        inputKeys: ["dry_run", "profile", "repo_id", "test_paths", "timeout_ms"],
+        outputKeys: ["commands", "counts", "dry_run", "focused", "ok", "profile", "repo_id", "status", "test_paths", "validation_artifact", "validation_id", "warnings"]
+      }
+    ]);
   });
 
   test("exposed tool surface shape stays stable", () => {
@@ -724,7 +1164,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks which approved repositories are available. Does not read file contents.",
+          "description": "Use this when listing approved repositories. It does not read repository contents.",
           "inputKeys": [],
           "name": "repo_list_roots",
           "outputKeys": [
@@ -739,7 +1179,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when a read, write, or cleanup policy question is blocked or the user asks what ChatGPT can access in a repo. Explains effective read/write/cleanup policy, local git operation toggles, matched globs, block reasons, and next steps without reading or mutating files.",
+          "description": "Use this when repository access is blocked or policy capabilities are unclear. It explains effective read, write, cleanup, validation, and Git-operation policy without mutation.",
           "inputKeys": [
             "operation",
             "path",
@@ -757,6 +1197,7 @@ describe("tool catalog contracts", () => {
             "repo_id",
             "requested_operation",
             "summary",
+            "validation",
             "write",
           ],
           "title": "Explain repository policy",
@@ -768,7 +1209,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks what the last write operation changed or how to continue review/recovery after a previous write. Reads safe local receipt metadata only and never mutates files or git.",
+          "description": "Use this when resuming after a write or checking what the latest write changed. It returns safe receipt metadata only.",
           "inputKeys": [
             "repo_id",
           ],
@@ -789,7 +1230,31 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to inspect repository structure or locate likely files by directory. Do not use this when the user asks to read file contents.",
+          "description": "Use this when inspecting bounded historical write and operation receipts. Prefer repo_last_write for only the latest operation.",
+          "inputKeys": [
+            "after_operation_id",
+            "cursor",
+            "limit",
+            "repo_id",
+          ],
+          "name": "repo_operation_ledger",
+          "outputKeys": [
+            "events",
+            "next_cursor",
+            "ok",
+            "repo_id",
+            "warnings",
+          ],
+          "title": "Read operation ledger",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when locating directories and likely files by repository structure. Use repo_fetch_file to read contents.",
           "inputKeys": [
             "cursor",
             "include_dependencies",
@@ -817,7 +1282,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to find code, inspect usages, perform a bughunt, or locate relevant files before reading them. Prefer this before repo_read_many.",
+          "description": "Use this when locating code, text, usages, or likely files. Prefer it before reading multiple files.",
           "inputKeys": [
             "context_lines",
             "cursor",
@@ -846,7 +1311,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user names a specific file or after repo_tree/repo_search identifies a relevant file. Supports line ranges. Do not use for broad repository review.",
+          "description": "Use this when reading one known file or line range. Do not use it for broad repository review.",
           "inputKeys": [
             "end_line",
             "max_bytes",
@@ -877,7 +1342,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to read a bounded set of explicit files or glob-matched files. Do not use this to read an entire repository.",
+          "description": "Use this when reading a bounded known set of files or globs. Do not use it to read an entire repository.",
           "inputKeys": [
             "cursor",
             "exclude_globs",
@@ -906,7 +1371,196 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks for git status, branch, dirty files, or changed file counts. Do not use this to inspect file contents.",
+          "description": "Use this when mapping file-level impact, imports, dependents, entrypoints, routes, components, or affected tests. Use repo_symbol_context for symbol-level evidence.",
+          "inputKeys": [
+            "focus_paths",
+            "goal",
+            "max_files",
+            "repo_id",
+          ],
+          "name": "repo_context_map",
+          "outputKeys": [
+            "affected_tests",
+            "component_signals",
+            "dependency_paths",
+            "entrypoints",
+            "framework_signals",
+            "generated_paths",
+            "import_edges",
+            "reverse_dependents",
+            "route_signals",
+            "scanned_file_count",
+            "truncated",
+            "warnings",
+          ],
+          "title": "Map repository context",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when gathering symbol-level evidence for definitions, references, calls, implementations, reverse dependents, or affected tests. Ask before starting an optional index.",
+          "inputKeys": [
+            "depth",
+            "direction",
+            "max_files",
+            "max_relations",
+            "max_symbols",
+            "paths",
+            "repo_id",
+            "symbols",
+          ],
+          "name": "repo_symbol_context",
+          "outputKeys": [
+            "affected_tests",
+            "cache",
+            "calls",
+            "confidence",
+            "definitions",
+            "exports",
+            "implementations",
+            "imports",
+            "ok",
+            "provider",
+            "references",
+            "repo_id",
+            "reverse_dependents",
+            "scanned_file_count",
+            "truncated",
+            "warnings",
+          ],
+          "title": "Inspect symbol context",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when checking or managing the optional Codebase Memory index. Before action=start, explicitly ask the user; status is safe to inspect without approval.",
+          "inputKeys": [
+            "action",
+            "repo_id",
+          ],
+          "name": "repo_code_index",
+          "outputKeys": [
+            "action",
+            "events",
+            "finished_at",
+            "ok",
+            "provider",
+            "repo_id",
+            "started_at",
+            "status",
+            "warnings",
+          ],
+          "title": "Manage optional code graph index",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when saved validation evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
+          "inputKeys": [
+            "max_candidates",
+            "max_diagnostics",
+            "repo_id",
+            "scope_paths",
+            "validation_id",
+          ],
+          "name": "repo_failure_diagnose",
+          "outputKeys": [
+            "candidates",
+            "correlations",
+            "diagnostics",
+            "next_tool_payloads",
+            "ok",
+            "repo_id",
+            "truncated",
+            "validation",
+            "warnings",
+          ],
+          "title": "Diagnose repository failure evidence",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when current changes need standalone evidence-based semantic risk review. Use repo_ship_review for combined final readiness.",
+          "inputKeys": [
+            "categories",
+            "max_files",
+            "max_findings",
+            "paths",
+            "repo_id",
+          ],
+          "name": "repo_semantic_review",
+          "outputKeys": [
+            "findings",
+            "next_tool_payloads",
+            "ok",
+            "repo_id",
+            "reviewed_paths",
+            "ship_readiness",
+            "summary",
+            "truncated",
+            "warnings",
+          ],
+          "title": "Review semantic change risks",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when combined final readiness across Git, validation, semantic, and delegation gates is needed before ship. Compact is default; detail=full adds granular expert evidence and payloads.",
+          "inputKeys": [
+            "categories",
+            "detail",
+            "max_files",
+            "max_findings",
+            "paths",
+            "repo_id",
+            "run_id",
+          ],
+          "name": "repo_ship_review",
+          "outputKeys": [
+            "delegation_gate",
+            "detail",
+            "failure_diagnosis",
+            "git_review",
+            "next_tool_payloads",
+            "ok",
+            "repo_id",
+            "review_loop",
+            "run_id",
+            "semantic_review",
+            "ship_readiness",
+            "truncated",
+            "warnings",
+          ],
+          "title": "Review ship readiness",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when checking branch, HEAD, cleanliness, or changed-file status. It does not read file contents.",
           "inputKeys": [
             "repo_id",
           ],
@@ -927,12 +1581,13 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to review changes or inspect a git diff. Default first call should pass only repo_id. Do not include staged, unstaged, paths, max_bytes, or context_lines on the first pass. Use optional filters only after the default diff is truncated, too broad, or the user asks for a specific comparison.",
+          "description": "Use this when raw Git diff content is requested. Default first call should pass only repo_id; add filters only for a second pass.",
           "inputKeys": [
             "base",
             "compare",
             "context_lines",
             "max_bytes",
+            "max_files",
             "paths",
             "repo_id",
             "staged",
@@ -944,7 +1599,9 @@ describe("tool catalog contracts", () => {
             "compare",
             "files",
             "staged",
+            "total_file_count",
             "truncated",
+            "truncation_reason",
             "unstaged",
             "warnings",
           ],
@@ -957,10 +1614,12 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to review current git changes, recover bad write-tool edits, clean up generated artifacts, prepare staging, or plan a local commit without mutating anything. Workflow hub that returns status, diff summary, warnings, and ready-to-run composite payloads for repo_write_stage_commit and repo_write_recover plus low-level fallback payloads.",
+          "description": "Use this when reviewing current Git state or planning commit and recovery without mutation. Compact is default; detail=full adds granular and dry-run payloads.",
           "inputKeys": [
+            "detail",
             "max_files",
             "mode",
+            "paths",
             "repo_id",
           ],
           "name": "repo_git_review",
@@ -968,11 +1627,14 @@ describe("tool catalog contracts", () => {
             "branch",
             "changed_paths",
             "clean",
+            "delegation_gate",
+            "detail",
             "diff_summary",
             "head_sha",
             "next_tool_payloads",
             "ok",
             "recommendation",
+            "ship_readiness",
           ],
           "title": "Plan git review",
         },
@@ -983,59 +1645,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when compatibility with the git-prefixed staging alias is needed; prefer repo_write_stage for ChatGPT workflows. Stages explicit repo-relative paths only, requires user approval and expected HEAD, and never runs shell commands.",
-          "inputKeys": [
-            "dry_run",
-            "expected_head_sha",
-            "paths",
-            "reason",
-            "repo_id",
-          ],
-          "name": "repo_git_stage",
-          "outputKeys": [
-            "dry_run",
-            "head_sha",
-            "ok",
-            "skipped",
-            "staged_paths",
-            "warnings",
-          ],
-          "title": "Stage explicit git paths",
-        },
-        {
-          "annotations": {
-            "destructiveHint": true,
-            "idempotentHint": false,
-            "openWorldHint": false,
-            "readOnlyHint": false,
-          },
-          "description": "Use this when compatibility with the git-prefixed unstaging alias is needed; prefer repo_write_unstage for ChatGPT workflows. Unstages explicit repo-relative paths only, requires user approval and expected HEAD, and never runs shell commands.",
-          "inputKeys": [
-            "dry_run",
-            "expected_head_sha",
-            "paths",
-            "reason",
-            "repo_id",
-          ],
-          "name": "repo_git_unstage",
-          "outputKeys": [
-            "dry_run",
-            "head_sha",
-            "ok",
-            "skipped",
-            "unstaged_paths",
-            "warnings",
-          ],
-          "title": "Unstage explicit git paths",
-        },
-        {
-          "annotations": {
-            "destructiveHint": true,
-            "idempotentHint": false,
-            "openWorldHint": false,
-            "readOnlyHint": false,
-          },
-          "description": "Use this when the user explicitly asks to recover bad unstaged worktree changes for reviewed explicit repo-relative paths. Runs only git restore -- <paths>, requires expected HEAD, does not unstage, stage, commit, reset, checkout, or run shell commands.",
+          "description": "Use this when explicitly restoring reviewed unstaged tracked paths. Prefer repo_write_recover for normal composite recovery.",
           "inputKeys": [
             "dry_run",
             "expected_head_sha",
@@ -1061,35 +1671,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when compatibility with the git-prefixed commit alias is needed; prefer repo_write_commit for ChatGPT workflows. Creates a local-only commit from exact staged paths, requires user approval and expected HEAD, does not push, and never runs shell commands.",
-          "inputKeys": [
-            "dry_run",
-            "expected_head_sha",
-            "expected_staged_paths",
-            "message",
-            "reason",
-            "repo_id",
-          ],
-          "name": "repo_git_commit",
-          "outputKeys": [
-            "commit_sha",
-            "committed_paths",
-            "dry_run",
-            "head_after",
-            "head_before",
-            "ok",
-            "warnings",
-          ],
-          "title": "Create local git commit",
-        },
-        {
-          "annotations": {
-            "destructiveHint": true,
-            "idempotentHint": false,
-            "openWorldHint": false,
-            "readOnlyHint": false,
-          },
-          "description": "Use this when the user explicitly asks to stage reviewed repo-relative paths separately or granular control is needed; prefer repo_write_stage_commit after repo_git_review for normal reviewed commits. Requires user approval, expected HEAD, explicit paths, and never runs shell commands.",
+          "description": "Use this when reviewed paths must be staged separately. Prefer the composite stage-and-commit payload when available.",
           "inputKeys": [
             "dry_run",
             "expected_head_sha",
@@ -1115,7 +1697,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to unstage reviewed repo-relative paths separately or granular recovery control is needed; prefer repo_write_recover after repo_git_review for normal reviewed recovery. Requires user approval, expected HEAD, explicit paths, and never runs shell commands.",
+          "description": "Use this when reviewed paths must be unstaged separately. Prefer repo_write_recover for normal composite recovery.",
           "inputKeys": [
             "dry_run",
             "expected_head_sha",
@@ -1141,7 +1723,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to create a local-only commit from already staged reviewed paths, or staged-only flow requires a commit without staging; prefer repo_write_stage_commit after repo_git_review for normal reviewed commits. Requires user approval, exact staged path verification, expected HEAD, does not push, and never runs shell commands.",
+          "description": "Use this when committing an exact already-staged path set locally. It verifies HEAD and staged paths and never pushes.",
           "inputKeys": [
             "dry_run",
             "expected_head_sha",
@@ -1169,7 +1751,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user has reviewed repo_git_review output and explicitly approves staging and committing exact repo-relative paths in one local-only operation. Requires expected HEAD, explicit paths, exact staged path verification, does not push, and never runs shell commands.",
+          "description": "Use this when review returns the canonical stage-and-commit payload. Normal review supplies explicit paths; multi-run integration supplies only its opaque review_pathset_id. The server rechecks exact HEAD, bytes, paths, gates, and staged set, creates one local commit, and never pushes.",
           "inputKeys": [
             "dry_run",
             "expected_head_sha",
@@ -1177,6 +1759,7 @@ describe("tool catalog contracts", () => {
             "paths",
             "reason",
             "repo_id",
+            "review_pathset_id",
           ],
           "name": "repo_write_stage_commit",
           "outputKeys": [
@@ -1188,6 +1771,7 @@ describe("tool catalog contracts", () => {
             "head_before",
             "ok",
             "remaining_changes",
+            "review_pathset_id",
             "staged_paths",
             "warnings",
           ],
@@ -1200,9 +1784,10 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user has reviewed repo_git_review output and explicitly approves recovering exact repo-relative paths in one operation. Can unstage, restore tracked worktree paths, and clean configured generated artifacts; requires expected HEAD, explicit paths, does not reset, checkout, stash, clean, commit, push, or run shell commands.",
+          "description": "Use this when review returns canonical composite recovery for explicit unstage, restore, cleanup, or discard paths. It never resets, stashes, pushes, or runs a shell.",
           "inputKeys": [
             "cleanup_paths",
+            "discard_paths",
             "dry_run",
             "expected_head_sha",
             "reason",
@@ -1214,6 +1799,7 @@ describe("tool catalog contracts", () => {
           "outputKeys": [
             "clean_after",
             "deleted",
+            "discarded",
             "dry_run",
             "head_sha",
             "ok",
@@ -1232,7 +1818,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to delete generated repo-local artifacts or local ChatGPT artifacts separately, or granular cleanup control is needed; prefer repo_write_recover after repo_git_review for normal reviewed recovery. Requires user approval, explicit paths, refuses tracked files, and never runs shell commands or git clean.",
+          "description": "Use this when separately deleting reviewed untracked generated or local artifacts allowed by cleanup policy. Prefer composite recovery when available.",
           "inputKeys": [
             "dry_run",
             "paths",
@@ -1256,17 +1842,20 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to understand, onboard into, plan work for, summarize, or start a daily planning session for an approved repository. Prefer this as the first planning tool because it returns bounded project signals without reading the whole repo.",
+          "description": "Use this when onboarding into or summarizing a repository. It returns repository-owned product context before technical metadata and never chooses the next goal.",
           "inputKeys": [
             "include",
             "repo_id",
           ],
           "name": "repo_project_brief",
           "outputKeys": [
+            "entrypoint_signals",
+            "framework_signals",
             "key_docs",
             "languages",
             "likely_entrypoints",
             "package_managers",
+            "product_brief",
             "project_type",
             "repo",
             "scripts",
@@ -1283,7 +1872,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks to find repo-local TODOs, FIXMEs, HACKs, roadmap notes, markdown checklist items, backlog candidates, or next tasks. Returns file and line grounded backlog signals for planning.",
+          "description": "Use this when the user explicitly requests TODO, FIXME, checkbox, roadmap, or backlog evidence. It returns candidates, not priority.",
           "inputKeys": [
             "cursor",
             "exclude_globs",
@@ -1312,7 +1901,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks about project memory, architecture decisions, conventions, patterns, rationale, or why the project is structured a certain way. Returns bounded evidence-grounded decisions, conventions, and gaps from repo documentation and package metadata.",
+          "description": "Use this when architecture rationale, conventions, or historical decisions are requested. It is supporting evidence, not product or active-work authority.",
           "inputKeys": [
             "include_sources",
             "repo_id",
@@ -1333,7 +1922,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks how to implement, refactor, debug, fix, or add a feature without writing files. Returns an evidence-grounded implementation plan, likely files, risks, tests, and open questions.",
+          "description": "Use this when the user and ChatGPT have already chosen an implementation goal. It plans how to execute that goal but never selects alternative work.",
           "inputKeys": [
             "goal",
             "include_globs",
@@ -1361,81 +1950,47 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when the user asks what to do next, what to prioritize, whether work is ready to ship, what to clean up, or how to choose focused solo-dev work. Returns advisory next actions from repo status, project brief, and task inventory.",
+          "description": "Use this when previewing a product-grounded Delegation v3 task before writing it. Use complete review-provided payloads for lineage children.",
           "inputKeys": [
-            "horizon",
-            "mode",
-            "repo_id",
-          ],
-          "name": "repo_next_action",
-          "outputKeys": [
-            "blockers",
-            "confidence",
-            "rationale",
-            "recommendation",
-            "suggested_actions",
-            "useful_context",
-            "warnings",
-          ],
-          "title": "Recommend next action",
-        },
-        {
-          "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": false,
-            "readOnlyHint": true,
-          },
-          "description": "Use this when the user asks for broad or ambiguous repository review. It estimates scope and suggests whether to ask a clarifying question before reading many files; for onboarding or daily planning prefer repo_project_brief first.",
-          "inputKeys": [
-            "prompt",
-          ],
-          "name": "repo_plan_review",
-          "outputKeys": [
-            "estimated_cost",
-            "explicit_full_repo",
-            "recommended_next_tools",
-            "recommended_scope",
-            "should_ask_clarifying_question",
-            "suggested_question",
-          ],
-          "title": "Plan repository review",
-        },
-        {
-          "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": false,
-            "readOnlyHint": true,
-          },
-          "description": "Use this when the user explicitly wants chat-copy mode: a Codex prompt returned in chat for review/copying. Does not write files or implement the change. Do not use when Codex will be told to implement .chatgpt/codex-runs/<run_id>/PROMPT.md; use repo_write_codex_task instead.",
-          "inputKeys": [
-            "acceptance_criteria",
-            "allowed_paths",
-            "context_summary",
+            "assignment",
+            "authorization_scope",
+            "explicit_exclusions",
             "forbidden_paths",
-            "implementation_scope",
-            "inspect_first",
-            "objective",
+            "hard_constraints",
+            "lineage",
+            "must_preserve",
+            "outcome",
+            "product_alignment",
+            "relevant_context",
             "repo_id",
             "run_id",
+            "runner",
+            "security_context",
+            "starting_points",
+            "task_kind",
+            "technical_acceptance_criteria",
+            "technical_context",
             "title",
-            "verification_commands",
+            "validation",
           ],
           "name": "repo_prepare_codex_task",
           "outputKeys": [
-            "codex_user_prompt",
+            "delegation_audit",
+            "lineage",
             "manifest_path",
-            "next_steps",
             "ok",
-            "prompt_markdown",
+            "product_contract_sha256",
             "prompt_path",
             "repo_id",
-            "result_path",
+            "result_json_path",
+            "review_gate_path",
+            "review_requirement",
             "run_id",
+            "schema_version",
+            "task_kind",
             "warnings",
           ],
-          "title": "Prepare Codex task prompt",
+          "title": "Prepare Delegation v3 task",
         },
         {
           "annotations": {
@@ -1444,38 +1999,52 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to create, write, start, resume, or hand off a repo-local Codex prompt/task/run that Codex will execute from the repo. Prefer this by default for repo-local Codex delegation. Writes only .chatgpt/codex-runs/<run_id>/PROMPT.md and run.json through repo write policy; does not implement, stage, commit, push, or run Codex.",
+          "description": "Use this when the user explicitly requests durable Codex or implementation-agent delegation. It writes bound Delegation v3 artifacts but never starts a runner, commits, or pushes.",
           "inputKeys": [
-            "acceptance_criteria",
-            "allowed_paths",
-            "context_summary",
+            "assignment",
+            "authorization_scope",
             "dry_run",
+            "explicit_exclusions",
             "forbidden_paths",
-            "implementation_scope",
-            "inspect_first",
-            "objective",
+            "hard_constraints",
+            "lineage",
+            "must_preserve",
+            "outcome",
+            "product_alignment",
             "reason",
+            "relevant_context",
             "repo_id",
             "run_id",
+            "runner",
+            "security_context",
+            "starting_points",
+            "task_kind",
+            "technical_acceptance_criteria",
+            "technical_context",
             "title",
-            "verification_commands",
+            "validation",
           ],
           "name": "repo_write_codex_task",
           "outputKeys": [
-            "codex_user_prompt",
+            "delegation_audit",
             "dry_run",
+            "lineage",
             "manifest_path",
-            "next_steps",
+            "next_tool_payloads",
             "ok",
-            "prompt_markdown",
+            "product_contract_sha256",
             "prompt_path",
             "repo_id",
-            "result_path",
+            "result_json_path",
+            "review_gate_path",
+            "review_requirement",
             "run_id",
+            "schema_version",
+            "task_kind",
             "warnings",
             "written_paths",
           ],
-          "title": "Write Codex task prompt",
+          "title": "Write Delegation v3 task",
         },
         {
           "annotations": {
@@ -1484,7 +2053,73 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": true,
           },
-          "description": "Use this when Codex has finished or the user asks to review a repo-local Codex run. Reads .chatgpt/codex-runs/<run_id>/RESULT.md and git diff review state without mutating files or git.",
+          "description": "Use this when inspecting agent lifecycle, runtime, questions, events, drift, or checkpoint state. It is read-only and never selects work.",
+          "inputKeys": [
+            "cursor",
+            "events_after",
+            "max_events",
+            "page_size",
+            "repo_id",
+            "run_id",
+            "statuses",
+            "wait_after_revision",
+            "wait_timeout_ms",
+          ],
+          "name": "repo_agent_runs",
+          "outputKeys": [
+            "drift_summary",
+            "matched_count",
+            "mode",
+            "next_cursor",
+            "next_tool_payloads",
+            "ok",
+            "repo_id",
+            "returned_count",
+            "revision",
+            "run",
+            "runs",
+            "supervisor",
+            "truncated",
+            "warnings",
+          ],
+          "title": "Inspect agent runs",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when answering the exact current structured questions for an awaiting-input run. It rejects stale or incomplete replies and only writes the reply artifact.",
+          "inputKeys": [
+            "answers",
+            "expected_question_sha256",
+            "repo_id",
+            "run_id",
+            "turn_index",
+          ],
+          "name": "repo_write_agent_reply",
+          "outputKeys": [
+            "agent_run",
+            "next_tool_payloads",
+            "ok",
+            "repo_id",
+            "run_id",
+            "turn_index",
+            "warnings",
+            "written_path",
+          ],
+          "title": "Reply to an agent run",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when an implementation agent has finished. It validates bound result, scope, Git state, TAC/PAC evidence, technical readiness, and product-review requirements without self-approving product claims.",
           "inputKeys": [
             "max_files",
             "repo_id",
@@ -1492,15 +2127,28 @@ describe("tool catalog contracts", () => {
           ],
           "name": "repo_codex_review",
           "outputKeys": [
+            "acceptance_evidence",
             "codex_result",
             "git_review",
+            "integrity",
+            "legacy_result_path",
             "next_steps",
             "next_tool_payloads",
             "ok",
+            "product_acceptance_evidence",
+            "product_evidence",
+            "product_review",
             "repo_id",
             "result_found",
-            "result_path",
+            "result_json_path",
+            "result_source",
+            "review_attestation",
+            "review_loop",
+            "review_state",
             "run_id",
+            "scope_evidence",
+            "technical_acceptance_evidence",
+            "technical_readiness",
             "warnings",
           ],
           "title": "Review Codex result",
@@ -1512,12 +2160,334 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to write or precisely edit one allowed repository file. Primary low-friction single-file writer/editor for docs, notes, prompts, and focused code edits; requires user approval, repo opt-in, and never runs shell, git, or Codex.",
+          "description": "Use this when recording the state-bound qualitative review returned by repo_codex_review. It validates the exact state and writes review evidence without staging or committing.",
+          "inputKeys": [
+            "dry_run",
+            "evidence",
+            "expected_review_state_sha256",
+            "product_verdict",
+            "rationale",
+            "reason",
+            "repo_id",
+            "run_id",
+          ],
+          "name": "repo_write_codex_review",
+          "outputKeys": [
+            "dry_run",
+            "next_steps",
+            "ok",
+            "product_verdict",
+            "repo_id",
+            "review_gate_path",
+            "review_gate_sha256",
+            "review_path",
+            "review_requirement",
+            "review_sha256",
+            "review_state_sha256",
+            "reviewed_at",
+            "run_id",
+            "technical_readiness_status",
+            "warnings",
+            "written_paths",
+          ],
+          "title": "Write state-bound Codex review",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when the owner explicitly approves integrating multiple currently attested Delegation v3 runs in one worktree, and only for that integration case. It requires exact run, HEAD, pathset, validation, product-verdict, semantic, scope, and content state, then writes an opaque pathset for one atomic local commit; it is not a force or skip-review path.",
+          "inputKeys": [
+            "commit_message",
+            "dry_run",
+            "expected_head_sha",
+            "reason",
+            "repo_id",
+            "run_ids",
+            "validation_id",
+          ],
+          "name": "repo_write_integration_review",
+          "outputKeys": [
+            "dry_run",
+            "head_sha",
+            "integration_id",
+            "integration_path",
+            "next_tool_payloads",
+            "ok",
+            "path_count",
+            "pathset_fingerprint",
+            "repo_id",
+            "review_pathset_id",
+            "reviewed_paths",
+            "run_ids",
+            "validation_id",
+            "warnings",
+            "written_paths",
+          ],
+          "title": "Write multi-run integration review",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when preparing an atomic create, modify, edit, delete, or rename patchset. It writes only local manifest metadata, not target files.",
+          "inputKeys": [
+            "base_head_sha",
+            "files",
+            "intent",
+            "repo_id",
+            "work_session_id",
+          ],
+          "name": "repo_prepare_patchset",
+          "outputKeys": [
+            "affected_paths",
+            "manifest",
+            "manifest_path",
+            "next_tool_payloads",
+            "ok",
+            "patchset_id",
+            "warnings",
+          ],
+          "title": "Prepare patchset",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when applying a prepared patchset atomically with stale-state guards. A HEAD-bound apply returns first-class rollback guidance.",
+          "inputKeys": [
+            "dry_run",
+            "expected_head_sha",
+            "patchset_id",
+            "repo_id",
+          ],
+          "name": "repo_apply_patchset",
+          "outputKeys": [
+            "changed_paths",
+            "counts",
+            "created_paths",
+            "deleted_paths",
+            "dry_run",
+            "hunk_diagnostics",
+            "modified_paths",
+            "next_tool_payloads",
+            "ok",
+            "operation_id",
+            "operation_receipt",
+            "patchset_id",
+            "renamed_paths",
+            "rollback_hint",
+            "warnings",
+          ],
+          "title": "Apply patchset",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when reviewing a prepared or applied patchset and its ledger/Git state. It does not mutate files or Git.",
+          "inputKeys": [
+            "max_files",
+            "patchset_id",
+            "repo_id",
+          ],
+          "name": "repo_review_patchset",
+          "outputKeys": [
+            "applied",
+            "git_review",
+            "manifest",
+            "manifest_path",
+            "ok",
+            "patchset_id",
+            "rolled_back",
+            "warnings",
+          ],
+          "title": "Review patchset",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when the user explicitly approves rollback of an uncommitted, unchanged applied patchset. It requires the expected HEAD.",
+          "inputKeys": [
+            "dry_run",
+            "expected_head_sha",
+            "patchset_id",
+            "repo_id",
+          ],
+          "name": "repo_rollback_patchset",
+          "outputKeys": [
+            "counts",
+            "deleted_paths",
+            "dry_run",
+            "next_tool_payloads",
+            "ok",
+            "operation_id",
+            "operation_receipt",
+            "patchset_id",
+            "restored_paths",
+            "skipped",
+            "warnings",
+          ],
+          "title": "Rollback patchset",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when running an allowlisted test, build, lint, typecheck, smoke, or all profile. A declared repo-owned make target takes priority; npm and safe pytest are fallbacks. Output is streamed into a bounded tail without a shell or arbitrary commands.",
+          "inputKeys": [
+            "dry_run",
+            "profile",
+            "repo_id",
+            "test_paths",
+            "timeout_ms",
+          ],
+          "name": "repo_validate",
+          "outputKeys": [
+            "commands",
+            "counts",
+            "dry_run",
+            "focused",
+            "ok",
+            "profile",
+            "repo_id",
+            "status",
+            "test_paths",
+            "validation_artifact",
+            "validation_id",
+            "warnings",
+          ],
+          "title": "Validate repository",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when starting a focused multi-step slice that benefits from content-free local progress state.",
+          "inputKeys": [
+            "constraints",
+            "dry_run",
+            "files_inspected",
+            "next_action",
+            "objective",
+            "repo_id",
+            "title",
+            "touched_files",
+            "work_session_id",
+          ],
+          "name": "repo_start_work_session",
+          "outputKeys": [
+            "current_path",
+            "dry_run",
+            "next_tool_payloads",
+            "ok",
+            "session",
+            "session_path",
+            "warnings",
+            "work_session_id",
+          ],
+          "title": "Start work session",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when appending decisions, inspected or touched paths, validation refs, risks, status, or next action to a work session.",
+          "inputKeys": [
+            "append_assumptions",
+            "append_decisions",
+            "append_files_inspected",
+            "append_pending_patchsets",
+            "append_touched_files",
+            "append_unresolved_risks",
+            "append_validation_results",
+            "dry_run",
+            "next_action",
+            "repo_id",
+            "status",
+            "work_session_id",
+          ],
+          "name": "repo_update_work_session",
+          "outputKeys": [
+            "current_path",
+            "dry_run",
+            "next_tool_payloads",
+            "ok",
+            "session",
+            "session_path",
+            "warnings",
+            "work_session_id",
+          ],
+          "title": "Update work session",
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+          },
+          "description": "Use this when resuming repository continuity. Current active or blocked work is full; completed history is compact unless work_session_id is supplied.",
+          "inputKeys": [
+            "repo_id",
+            "work_session_id",
+          ],
+          "name": "repo_current_work_session",
+          "outputKeys": [
+            "continuity_state",
+            "current_path",
+            "found",
+            "lookup_source",
+            "ok",
+            "repo_id",
+            "session",
+            "session_path",
+            "warnings",
+            "work_session_id",
+          ],
+          "title": "Read current work session",
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+          },
+          "description": "Use this when directly creating or precisely editing one allowed repository file. It supports stale-state guards and never runs Git, Codex, or a shell.",
           "inputKeys": [
             "action",
             "content",
             "create_dirs",
             "dry_run",
+            "expected_head_sha",
+            "expected_missing",
+            "expected_old_sha256",
             "find",
             "path",
             "reason",
@@ -1548,10 +2518,11 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user explicitly asks to apply a cohesive multi-file edit pack to allowed repository files. Primary low-friction multi-file writer/editor for full-file writes and exact-match edits; requires user approval, repo opt-in, and never runs shell, git, stage, commit, or restore.",
+          "description": "Use this when directly applying one cohesive multi-file write/edit pack. It supports stale-state guards and never stages, commits, restores, or runs a shell.",
           "inputKeys": [
             "changes",
             "dry_run",
+            "expected_head_sha",
             "reason",
             "repo_id",
           ],
@@ -1576,7 +2547,7 @@ describe("tool catalog contracts", () => {
             "openWorldHint": false,
             "readOnlyHint": false,
           },
-          "description": "Use this when the user asks for a local-only ChatGPT handoff: skapa handoff, create handoff, skriv handoff, session handoff, resume note, fortsättningsanteckning, ny chatt context, or överlämning till nästa chatt. Creates .chatgpt/handoffs/*.local.md and updates current.local.md; never stages, commits, pushes, resets, checks out, or runs shell commands.",
+          "description": "Use this when the user asks for a local-only ChatGPT handoff: skapa handoff, create handoff, skriv handoff, session handoff, or resume note. It writes .chatgpt/handoffs/*.local.md and updates current.local.md without Git mutation.",
           "inputKeys": [
             "completed_work",
             "constraints",
@@ -1614,6 +2585,75 @@ describe("tool catalog contracts", () => {
     `);
   });
 
+  test("legacy catalog, handler, and tool-name imports preserve their complete compatibility surface", () => {
+    const legacyDefinitions: readonly ToolDefinition[] = toolCatalog;
+    const legacyNames: ToolName[] = legacyDefinitions.map((tool) => tool.name);
+
+    expect(legacyNames).toEqual(CANONICAL_TOOL_ORDER);
+    expect(Object.keys(handlerExports).sort()).toEqual([
+      "agentRunsHandler",
+      "applyPatchsetHandler",
+      "changePlanHandler",
+      "cleanupPathsHandler",
+      "codeIndexHandler",
+      "codexReviewHandler",
+      "contextMapHandler",
+      "currentWorkSessionHandler",
+      "decisionMemoryHandler",
+      "failureDiagnoseHandler",
+      "fetchFileHandler",
+      "gitDiffHandler",
+      "gitRestorePathsHandler",
+      "gitReviewHandler",
+      "gitStatusHandler",
+      "lastWriteHandler",
+      "listRootsHandler",
+      "operationLedgerHandler",
+      "policyExplainHandler",
+      "prepareCodexTaskHandler",
+      "preparePatchsetHandler",
+      "projectBriefHandler",
+      "readManyHandler",
+      "reviewPatchsetHandler",
+      "rollbackPatchsetHandler",
+      "searchHandler",
+      "semanticReviewHandler",
+      "shipReviewHandler",
+      "startWorkSessionHandler",
+      "symbolContextHandler",
+      "taskInventoryHandler",
+      "treeHandler",
+      "updateWorkSessionHandler",
+      "validateHandler",
+      "writeAgentReplyHandler",
+      "writeChangesHandler",
+      "writeCodexReviewHandler",
+      "writeCodexTaskHandler",
+      "writeCommitHandler",
+      "writeFileHandler",
+      "writeHandoffHandler",
+      "writeIntegrationReviewHandler",
+      "writeRecoverHandler",
+      "writeStageCommitHandler",
+      "writeStageHandler",
+      "writeUnstageHandler"
+    ]);
+    for (const handler of Object.values(handlerExports)) expect(handler).toBeTypeOf("function");
+  });
+
+  test("legacy catalog and handler imports are thin compatibility barrels", () => {
+    const catalogSource = readFileSync("src/tools/catalog.ts", "utf8");
+    const handlerSource = readFileSync("src/tools/handlers.ts", "utf8");
+
+    expect(catalogSource).toContain("toolRegistry as toolCatalog");
+    expect(catalogSource).not.toContain("name: \"repo_");
+    expect(handlerSource).toContain("./handlers/developer.js");
+    expect(handlerSource).toContain("./handlers/delegation.js");
+    expect(handlerSource).toContain("./handlers/patchsets.js");
+    expect(handlerSource).not.toMatch(/new\s+\w+Service\s*\(/);
+    expect(handlerSource.split(/\r?\n/).filter(Boolean).length).toBeLessThanOrEqual(10);
+  });
+
   test("catalog does not define inline zod schemas", () => {
     const source = readFileSync("src/tools/catalog.ts", "utf8");
 
@@ -1623,3 +2663,16 @@ describe("tool catalog contracts", () => {
     expect(source).not.toMatch(/\.shape\b/);
   });
 });
+
+function contractSummaries(names: string[]) {
+  return names.map((name) => {
+    const tool = toolCatalog.find((candidate) => candidate.name === name);
+    expect(tool, `${name} should exist`).toBeDefined();
+    return {
+      name,
+      mutating: tool!.annotations.readOnlyHint === false,
+      inputKeys: Object.keys(tool!.inputSchema.shape).sort(),
+      outputKeys: Object.keys(tool!.outputSchema.shape).sort()
+    };
+  });
+}

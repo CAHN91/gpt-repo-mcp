@@ -1,6 +1,7 @@
 import ignore from "ignore";
 import { posix } from "node:path";
 import { DEFAULT_EXCLUDES } from "../policies/default-excludes.js";
+import { isDelegationControlArtifact } from "../policies/delegation-control-artifacts.js";
 
 const PUBLIC_ENV_TEMPLATE_PATHS = new Set([".env.example", ".env.sample", ".env.template", "example.env"]);
 
@@ -14,6 +15,9 @@ export class IgnoreEngine {
 
   isSensitiveCandidate(repoPath: string): boolean {
     const normalized = normalizeRepoPath(repoPath);
+    if (this.isInternalArtifact(normalized)) {
+      return true;
+    }
     if (isPublicEnvTemplatePath(normalized)) {
       return false;
     }
@@ -33,6 +37,10 @@ export class IgnoreEngine {
       segments.includes("secrets") ||
       segments.includes("credentials")
     );
+  }
+
+  isInternalArtifact(repoPath: string): boolean {
+    return isDelegationControlArtifact(normalizeRepoPath(repoPath));
   }
 }
 

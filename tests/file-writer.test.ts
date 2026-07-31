@@ -51,6 +51,74 @@ describe("FileWriter", () => {
     await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# New Guide\n");
   });
 
+  test("write rejects existing file when expected_missing is true", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+
+    await expect(writer.write({
+      path: "docs/guide.md",
+      content: "# New Guide\n",
+      expected_missing: true
+    })).rejects.toMatchObject({
+      code: "WRITE_TARGET_EXISTS",
+      diagnostics: {
+        failed_path: "docs/guide.md",
+        current_sha256: sha256("# Guide\nSearchable docs\n")
+      }
+    });
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\n");
+  });
+
+  test("write rejects missing file when expected_old_sha256 is supplied", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+
+    await expect(writer.write({
+      path: "docs/missing.md",
+      content: "New\n",
+      create_dirs: true,
+      expected_old_sha256: "0".repeat(64)
+    })).rejects.toMatchObject({
+      code: "WRITE_TARGET_MISSING",
+      diagnostics: {
+        failed_path: "docs/missing.md",
+        expected_old_sha256: "0".repeat(64)
+      }
+    });
+  });
+
+  test("write rejects stale expected_old_sha256", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+
+    await expect(writer.write({
+      path: "docs/guide.md",
+      content: "# New Guide\n",
+      expected_old_sha256: "0".repeat(64)
+    })).rejects.toMatchObject({
+      code: "WRITE_STALE_EXPECTED_SHA",
+      diagnostics: {
+        failed_path: "docs/guide.md",
+        expected_old_sha256: "0".repeat(64),
+        current_sha256: sha256("# Guide\nSearchable docs\n")
+      }
+    });
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nSearchable docs\n");
+  });
+
+  test("write accepts matching expected_old_sha256", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+
+    await writer.write({
+      path: "docs/guide.md",
+      content: "# New Guide\n",
+      expected_old_sha256: sha256("# Guide\nSearchable docs\n")
+    });
+
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# New Guide\n");
+  });
+
   test("write no-op when content is identical", async () => {
     const fixture = await createRepoFixture();
     const writer = createWriter(fixture.root, { enabled: true });
@@ -236,6 +304,58 @@ describe("FileWriter", () => {
     await expect(writer.write({
       path: "docs/guide.md",
       content: "OPENAI_API_KEY=sk-realSecretValue123\n"
+    })).rejects.toMatchObject({ code: "SECRET_CANDIDATE_BLOCKED" });
+  });
+
+  test("safe exact replace succeeds when another line contains an existing secret", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+    const existingSecret = "OPENAI_API_KEY=sk-existingSecretValue123";
+    await writeFile(join(fixture.root, "docs", "guide.md"), `${existingSecret}\nstatus=old\n`);
+
+    await writer.write({
+      path: "docs/guide.md",
+      action: "replace",
+      find: "status=old",
+      replace: "status=new"
+    });
+
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe(`${existingSecret}\nstatus=new\n`);
+  });
+
+  test("grouped edit succeeds when another line contains an existing secret", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+    const existingSecret = "OPENAI_API_KEY=sk-existingSecretValue123";
+    await writeFile(join(fixture.root, "docs", "guide.md"), `${existingSecret}\nfirst=old\nsecond=old\n`);
+
+    await writer.writeGroupedEdit({
+      path: "docs/guide.md",
+      edits: [
+        { type: "replace", find: "first=old", replace: "first=new" },
+        { type: "replace", find: "second=old", replace: "second=new" }
+      ]
+    });
+
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe(`${existingSecret}\nfirst=new\nsecond=new\n`);
+  });
+
+  test("partial edits block new secrets, including values formed across an append boundary", async () => {
+    const fixture = await createRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+
+    await expect(writer.write({
+      path: "docs/guide.md",
+      action: "replace",
+      find: "Searchable docs",
+      replace: "OPENAI_API_KEY=sk-newSecretValue123"
+    })).rejects.toMatchObject({ code: "SECRET_CANDIDATE_BLOCKED" });
+
+    await writeFile(join(fixture.root, "docs", "guide.md"), "OPENAI_API_KEY=sk-");
+    await expect(writer.write({
+      path: "docs/guide.md",
+      action: "append",
+      content: "newSecretValue123\n"
     })).rejects.toMatchObject({ code: "SECRET_CANDIDATE_BLOCKED" });
   });
 

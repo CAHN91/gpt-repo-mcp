@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { execFile } from "node:child_process";
@@ -8,33 +9,40 @@ import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { SERVER_INSTRUCTIONS, createMcpServer } from "../src/register.js";
 import { RootRegistry } from "../src/services/root-registry.js";
-import { readOnlyAnnotations, writeAnnotations } from "../src/tools/annotations.js";
+import { nonDestructiveMutationAnnotations, readOnlyAnnotations, safeMutationAnnotations, writeAnnotations } from "../src/tools/annotations.js";
 import { toolCatalog } from "../src/tools/catalog.js";
-import { isMutatingToolName } from "../src/tools/mutating-tools.js";
+import { MUTATING_TOOL_NAMES, isMutatingToolName } from "../src/tools/mutating-tools.js";
 
 const execFileAsync = promisify(execFile);
 
 describe("MCP contract", () => {
-  test("initialize exposes server instructions and tool capability", async () => {
+  test("initialize exposes compact safety-complete server instructions", async () => {
     const { client, close } = await connectFixtureServer();
     try {
       expect(client.getServerVersion()).toMatchObject({ name: "gpt-repo-mcp", version: "0.1.0" });
       expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
       expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
-      expect(SERVER_INSTRUCTIONS).not.toContain("read-only repository app");
-      expect(SERVER_INSTRUCTIONS).toContain("Mutating tools are disabled by default and require repo-local config opt-in");
-      expect(SERVER_INSTRUCTIONS).toContain("Prefer the repo_write_* names for ChatGPT workflows");
-      expect(SERVER_INSTRUCTIONS).toContain("repo_write_commit, repo_write_stage_commit, and repo_git_commit create local commits only");
-      expect(SERVER_INSTRUCTIONS).toContain("repo_git_review is the workflow hub");
-      expect(SERVER_INSTRUCTIONS).toContain("prefer composite workflow tools");
-      expect(SERVER_INSTRUCTIONS).toContain("repo_write_stage_commit for reviewed happy-path local commits");
-      expect(SERVER_INSTRUCTIONS).toContain("repo_write_recover for reviewed recovery");
-      expect(SERVER_INSTRUCTIONS).toContain("Dry-run is optional preview");
-      expect(SERVER_INSTRUCTIONS).toContain("Omit optional reason by default");
-      expect(SERVER_INSTRUCTIONS).toContain("repo_last_write");
-      expect(SERVER_INSTRUCTIONS).not.toContain("dry-run first when possible");
-      expect(SERVER_INSTRUCTIONS).toContain("do not push");
-      expect(SERVER_INSTRUCTIONS).toContain("do not run shell commands");
+      expect(Buffer.byteLength(SERVER_INSTRUCTIONS, "utf8")).toBeLessThan(6_000);
+      expect(SERVER_INSTRUCTIONS).toContain("Tools with local side effects require the relevant repository write or operations policy");
+      for (const toolName of MUTATING_TOOL_NAMES) expect(SERVER_INSTRUCTIONS).toContain(toolName);
+      for (const clause of [
+        "repo_code_index is a non-destructive idempotent provider/index mutation",
+        "repo_prepare_patchset is a non-destructive non-idempotent local metadata mutation",
+        "The canonical direct-development path is",
+        "The user and ChatGPT choose what to build",
+        "continuity_state distinguishes active work, blocked ongoing work, and completed_history",
+        "New task creation is Delegation v3 only",
+        "Runner completion never constitutes a final product verdict",
+        "Agent PAC claims are evidence only",
+        "detail=full only for granular dry-run payloads or expert diagnostics",
+        "Dry-run is optional preview",
+        "Omit optional reason by default",
+        "do not push",
+        "do not run shell commands"
+      ]) expect(SERVER_INSTRUCTIONS).toContain(clause);
+      for (const removed of ["repo_next_action", "repo_plan_review", "repo_git_stage", "repo_git_unstage", "repo_git_commit"]) {
+        expect(SERVER_INSTRUCTIONS).not.toContain(removed);
+      }
     } finally {
       await close();
     }
@@ -52,7 +60,13 @@ describe("MCP contract", () => {
         expect(tool.inputSchema).toBeDefined();
         expect(tool.outputSchema).toBeDefined();
         if (isMutatingToolName(tool.name)) {
-          expect(tool.annotations).toMatchObject(writeAnnotations);
+          expect(tool.annotations).toMatchObject(
+            tool.name === "repo_code_index"
+              ? safeMutationAnnotations
+              : tool.name === "repo_prepare_patchset"
+                ? nonDestructiveMutationAnnotations
+                : writeAnnotations
+          );
         } else {
           expect(tool.annotations).toMatchObject(readOnlyAnnotations);
         }
@@ -83,7 +97,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks which approved repositories are available. Does not read file contents.",
+            "description": "Use this when listing approved repositories. It does not read repository contents.",
             "inputKeys": [],
             "name": "repo_list_roots",
             "outputKeys": [
@@ -98,7 +112,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when a read, write, or cleanup policy question is blocked or the user asks what ChatGPT can access in a repo. Explains effective read/write/cleanup policy, local git operation toggles, matched globs, block reasons, and next steps without reading or mutating files.",
+            "description": "Use this when repository access is blocked or policy capabilities are unclear. It explains effective read, write, cleanup, validation, and Git-operation policy without mutation.",
             "inputKeys": [
               "operation",
               "path",
@@ -116,6 +130,7 @@ describe("MCP contract", () => {
               "repo_id",
               "requested_operation",
               "summary",
+              "validation",
               "write",
             ],
             "title": "Explain repository policy",
@@ -127,7 +142,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks what the last write operation changed or how to continue review/recovery after a previous write. Reads safe local receipt metadata only and never mutates files or git.",
+            "description": "Use this when resuming after a write or checking what the latest write changed. It returns safe receipt metadata only.",
             "inputKeys": [
               "repo_id",
             ],
@@ -148,7 +163,31 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to inspect repository structure or locate likely files by directory. Do not use this when the user asks to read file contents.",
+            "description": "Use this when inspecting bounded historical write and operation receipts. Prefer repo_last_write for only the latest operation.",
+            "inputKeys": [
+              "after_operation_id",
+              "cursor",
+              "limit",
+              "repo_id",
+            ],
+            "name": "repo_operation_ledger",
+            "outputKeys": [
+              "events",
+              "next_cursor",
+              "ok",
+              "repo_id",
+              "warnings",
+            ],
+            "title": "Read operation ledger",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when locating directories and likely files by repository structure. Use repo_fetch_file to read contents.",
             "inputKeys": [
               "cursor",
               "include_dependencies",
@@ -176,7 +215,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to find code, inspect usages, perform a bughunt, or locate relevant files before reading them. Prefer this before repo_read_many.",
+            "description": "Use this when locating code, text, usages, or likely files. Prefer it before reading multiple files.",
             "inputKeys": [
               "context_lines",
               "cursor",
@@ -205,7 +244,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user names a specific file or after repo_tree/repo_search identifies a relevant file. Supports line ranges. Do not use for broad repository review.",
+            "description": "Use this when reading one known file or line range. Do not use it for broad repository review.",
             "inputKeys": [
               "end_line",
               "max_bytes",
@@ -236,7 +275,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to read a bounded set of explicit files or glob-matched files. Do not use this to read an entire repository.",
+            "description": "Use this when reading a bounded known set of files or globs. Do not use it to read an entire repository.",
             "inputKeys": [
               "cursor",
               "exclude_globs",
@@ -265,7 +304,196 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks for git status, branch, dirty files, or changed file counts. Do not use this to inspect file contents.",
+            "description": "Use this when mapping file-level impact, imports, dependents, entrypoints, routes, components, or affected tests. Use repo_symbol_context for symbol-level evidence.",
+            "inputKeys": [
+              "focus_paths",
+              "goal",
+              "max_files",
+              "repo_id",
+            ],
+            "name": "repo_context_map",
+            "outputKeys": [
+              "affected_tests",
+              "component_signals",
+              "dependency_paths",
+              "entrypoints",
+              "framework_signals",
+              "generated_paths",
+              "import_edges",
+              "reverse_dependents",
+              "route_signals",
+              "scanned_file_count",
+              "truncated",
+              "warnings",
+            ],
+            "title": "Map repository context",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when gathering symbol-level evidence for definitions, references, calls, implementations, reverse dependents, or affected tests. Ask before starting an optional index.",
+            "inputKeys": [
+              "depth",
+              "direction",
+              "max_files",
+              "max_relations",
+              "max_symbols",
+              "paths",
+              "repo_id",
+              "symbols",
+            ],
+            "name": "repo_symbol_context",
+            "outputKeys": [
+              "affected_tests",
+              "cache",
+              "calls",
+              "confidence",
+              "definitions",
+              "exports",
+              "implementations",
+              "imports",
+              "ok",
+              "provider",
+              "references",
+              "repo_id",
+              "reverse_dependents",
+              "scanned_file_count",
+              "truncated",
+              "warnings",
+            ],
+            "title": "Inspect symbol context",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when checking or managing the optional Codebase Memory index. Before action=start, explicitly ask the user; status is safe to inspect without approval.",
+            "inputKeys": [
+              "action",
+              "repo_id",
+            ],
+            "name": "repo_code_index",
+            "outputKeys": [
+              "action",
+              "events",
+              "finished_at",
+              "ok",
+              "provider",
+              "repo_id",
+              "started_at",
+              "status",
+              "warnings",
+            ],
+            "title": "Manage optional code graph index",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when saved validation evidence needs normalized diagnostics and deterministic correlation. It does not run commands or claim an LLM root cause.",
+            "inputKeys": [
+              "max_candidates",
+              "max_diagnostics",
+              "repo_id",
+              "scope_paths",
+              "validation_id",
+            ],
+            "name": "repo_failure_diagnose",
+            "outputKeys": [
+              "candidates",
+              "correlations",
+              "diagnostics",
+              "next_tool_payloads",
+              "ok",
+              "repo_id",
+              "truncated",
+              "validation",
+              "warnings",
+            ],
+            "title": "Diagnose repository failure evidence",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when current changes need standalone evidence-based semantic risk review. Use repo_ship_review for combined final readiness.",
+            "inputKeys": [
+              "categories",
+              "max_files",
+              "max_findings",
+              "paths",
+              "repo_id",
+            ],
+            "name": "repo_semantic_review",
+            "outputKeys": [
+              "findings",
+              "next_tool_payloads",
+              "ok",
+              "repo_id",
+              "reviewed_paths",
+              "ship_readiness",
+              "summary",
+              "truncated",
+              "warnings",
+            ],
+            "title": "Review semantic change risks",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when combined final readiness across Git, validation, semantic, and delegation gates is needed before ship. Compact is default; detail=full adds granular expert evidence and payloads.",
+            "inputKeys": [
+              "categories",
+              "detail",
+              "max_files",
+              "max_findings",
+              "paths",
+              "repo_id",
+              "run_id",
+            ],
+            "name": "repo_ship_review",
+            "outputKeys": [
+              "delegation_gate",
+              "detail",
+              "failure_diagnosis",
+              "git_review",
+              "next_tool_payloads",
+              "ok",
+              "repo_id",
+              "review_loop",
+              "run_id",
+              "semantic_review",
+              "ship_readiness",
+              "truncated",
+              "warnings",
+            ],
+            "title": "Review ship readiness",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when checking branch, HEAD, cleanliness, or changed-file status. It does not read file contents.",
             "inputKeys": [
               "repo_id",
             ],
@@ -286,12 +514,13 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to review changes or inspect a git diff. Default first call should pass only repo_id. Do not include staged, unstaged, paths, max_bytes, or context_lines on the first pass. Use optional filters only after the default diff is truncated, too broad, or the user asks for a specific comparison.",
+            "description": "Use this when raw Git diff content is requested. Default first call should pass only repo_id; add filters only for a second pass.",
             "inputKeys": [
               "base",
               "compare",
               "context_lines",
               "max_bytes",
+              "max_files",
               "paths",
               "repo_id",
               "staged",
@@ -303,7 +532,9 @@ describe("MCP contract", () => {
               "compare",
               "files",
               "staged",
+              "total_file_count",
               "truncated",
+              "truncation_reason",
               "unstaged",
               "warnings",
             ],
@@ -316,10 +547,12 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to review current git changes, recover bad write-tool edits, clean up generated artifacts, prepare staging, or plan a local commit without mutating anything. Workflow hub that returns status, diff summary, warnings, and ready-to-run composite payloads for repo_write_stage_commit and repo_write_recover plus low-level fallback payloads.",
+            "description": "Use this when reviewing current Git state or planning commit and recovery without mutation. Compact is default; detail=full adds granular and dry-run payloads.",
             "inputKeys": [
+              "detail",
               "max_files",
               "mode",
+              "paths",
               "repo_id",
             ],
             "name": "repo_git_review",
@@ -327,11 +560,14 @@ describe("MCP contract", () => {
               "branch",
               "changed_paths",
               "clean",
+              "delegation_gate",
+              "detail",
               "diff_summary",
               "head_sha",
               "next_tool_payloads",
               "ok",
               "recommendation",
+              "ship_readiness",
             ],
             "title": "Plan git review",
           },
@@ -342,59 +578,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when compatibility with the git-prefixed staging alias is needed; prefer repo_write_stage for ChatGPT workflows. Stages explicit repo-relative paths only, requires user approval and expected HEAD, and never runs shell commands.",
-            "inputKeys": [
-              "dry_run",
-              "expected_head_sha",
-              "paths",
-              "reason",
-              "repo_id",
-            ],
-            "name": "repo_git_stage",
-            "outputKeys": [
-              "dry_run",
-              "head_sha",
-              "ok",
-              "skipped",
-              "staged_paths",
-              "warnings",
-            ],
-            "title": "Stage explicit git paths",
-          },
-          {
-            "annotations": {
-              "destructiveHint": true,
-              "idempotentHint": false,
-              "openWorldHint": false,
-              "readOnlyHint": false,
-            },
-            "description": "Use this when compatibility with the git-prefixed unstaging alias is needed; prefer repo_write_unstage for ChatGPT workflows. Unstages explicit repo-relative paths only, requires user approval and expected HEAD, and never runs shell commands.",
-            "inputKeys": [
-              "dry_run",
-              "expected_head_sha",
-              "paths",
-              "reason",
-              "repo_id",
-            ],
-            "name": "repo_git_unstage",
-            "outputKeys": [
-              "dry_run",
-              "head_sha",
-              "ok",
-              "skipped",
-              "unstaged_paths",
-              "warnings",
-            ],
-            "title": "Unstage explicit git paths",
-          },
-          {
-            "annotations": {
-              "destructiveHint": true,
-              "idempotentHint": false,
-              "openWorldHint": false,
-              "readOnlyHint": false,
-            },
-            "description": "Use this when the user explicitly asks to recover bad unstaged worktree changes for reviewed explicit repo-relative paths. Runs only git restore -- <paths>, requires expected HEAD, does not unstage, stage, commit, reset, checkout, or run shell commands.",
+            "description": "Use this when explicitly restoring reviewed unstaged tracked paths. Prefer repo_write_recover for normal composite recovery.",
             "inputKeys": [
               "dry_run",
               "expected_head_sha",
@@ -420,35 +604,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when compatibility with the git-prefixed commit alias is needed; prefer repo_write_commit for ChatGPT workflows. Creates a local-only commit from exact staged paths, requires user approval and expected HEAD, does not push, and never runs shell commands.",
-            "inputKeys": [
-              "dry_run",
-              "expected_head_sha",
-              "expected_staged_paths",
-              "message",
-              "reason",
-              "repo_id",
-            ],
-            "name": "repo_git_commit",
-            "outputKeys": [
-              "commit_sha",
-              "committed_paths",
-              "dry_run",
-              "head_after",
-              "head_before",
-              "ok",
-              "warnings",
-            ],
-            "title": "Create local git commit",
-          },
-          {
-            "annotations": {
-              "destructiveHint": true,
-              "idempotentHint": false,
-              "openWorldHint": false,
-              "readOnlyHint": false,
-            },
-            "description": "Use this when the user explicitly asks to stage reviewed repo-relative paths separately or granular control is needed; prefer repo_write_stage_commit after repo_git_review for normal reviewed commits. Requires user approval, expected HEAD, explicit paths, and never runs shell commands.",
+            "description": "Use this when reviewed paths must be staged separately. Prefer the composite stage-and-commit payload when available.",
             "inputKeys": [
               "dry_run",
               "expected_head_sha",
@@ -474,7 +630,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to unstage reviewed repo-relative paths separately or granular recovery control is needed; prefer repo_write_recover after repo_git_review for normal reviewed recovery. Requires user approval, expected HEAD, explicit paths, and never runs shell commands.",
+            "description": "Use this when reviewed paths must be unstaged separately. Prefer repo_write_recover for normal composite recovery.",
             "inputKeys": [
               "dry_run",
               "expected_head_sha",
@@ -500,7 +656,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to create a local-only commit from already staged reviewed paths, or staged-only flow requires a commit without staging; prefer repo_write_stage_commit after repo_git_review for normal reviewed commits. Requires user approval, exact staged path verification, expected HEAD, does not push, and never runs shell commands.",
+            "description": "Use this when committing an exact already-staged path set locally. It verifies HEAD and staged paths and never pushes.",
             "inputKeys": [
               "dry_run",
               "expected_head_sha",
@@ -528,7 +684,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user has reviewed repo_git_review output and explicitly approves staging and committing exact repo-relative paths in one local-only operation. Requires expected HEAD, explicit paths, exact staged path verification, does not push, and never runs shell commands.",
+            "description": "Use this when review returns the canonical stage-and-commit payload. Normal review supplies explicit paths; multi-run integration supplies only its opaque review_pathset_id. The server rechecks exact HEAD, bytes, paths, gates, and staged set, creates one local commit, and never pushes.",
             "inputKeys": [
               "dry_run",
               "expected_head_sha",
@@ -536,6 +692,7 @@ describe("MCP contract", () => {
               "paths",
               "reason",
               "repo_id",
+              "review_pathset_id",
             ],
             "name": "repo_write_stage_commit",
             "outputKeys": [
@@ -547,6 +704,7 @@ describe("MCP contract", () => {
               "head_before",
               "ok",
               "remaining_changes",
+              "review_pathset_id",
               "staged_paths",
               "warnings",
             ],
@@ -559,9 +717,10 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user has reviewed repo_git_review output and explicitly approves recovering exact repo-relative paths in one operation. Can unstage, restore tracked worktree paths, and clean configured generated artifacts; requires expected HEAD, explicit paths, does not reset, checkout, stash, clean, commit, push, or run shell commands.",
+            "description": "Use this when review returns canonical composite recovery for explicit unstage, restore, cleanup, or discard paths. It never resets, stashes, pushes, or runs a shell.",
             "inputKeys": [
               "cleanup_paths",
+              "discard_paths",
               "dry_run",
               "expected_head_sha",
               "reason",
@@ -573,6 +732,7 @@ describe("MCP contract", () => {
             "outputKeys": [
               "clean_after",
               "deleted",
+              "discarded",
               "dry_run",
               "head_sha",
               "ok",
@@ -591,7 +751,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to delete generated repo-local artifacts or local ChatGPT artifacts separately, or granular cleanup control is needed; prefer repo_write_recover after repo_git_review for normal reviewed recovery. Requires user approval, explicit paths, refuses tracked files, and never runs shell commands or git clean.",
+            "description": "Use this when separately deleting reviewed untracked generated or local artifacts allowed by cleanup policy. Prefer composite recovery when available.",
             "inputKeys": [
               "dry_run",
               "paths",
@@ -615,17 +775,20 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to understand, onboard into, plan work for, summarize, or start a daily planning session for an approved repository. Prefer this as the first planning tool because it returns bounded project signals without reading the whole repo.",
+            "description": "Use this when onboarding into or summarizing a repository. It returns repository-owned product context before technical metadata and never chooses the next goal.",
             "inputKeys": [
               "include",
               "repo_id",
             ],
             "name": "repo_project_brief",
             "outputKeys": [
+              "entrypoint_signals",
+              "framework_signals",
               "key_docs",
               "languages",
               "likely_entrypoints",
               "package_managers",
+              "product_brief",
               "project_type",
               "repo",
               "scripts",
@@ -642,7 +805,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks to find repo-local TODOs, FIXMEs, HACKs, roadmap notes, markdown checklist items, backlog candidates, or next tasks. Returns file and line grounded backlog signals for planning.",
+            "description": "Use this when the user explicitly requests TODO, FIXME, checkbox, roadmap, or backlog evidence. It returns candidates, not priority.",
             "inputKeys": [
               "cursor",
               "exclude_globs",
@@ -671,7 +834,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks about project memory, architecture decisions, conventions, patterns, rationale, or why the project is structured a certain way. Returns bounded evidence-grounded decisions, conventions, and gaps from repo documentation and package metadata.",
+            "description": "Use this when architecture rationale, conventions, or historical decisions are requested. It is supporting evidence, not product or active-work authority.",
             "inputKeys": [
               "include_sources",
               "repo_id",
@@ -692,7 +855,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks how to implement, refactor, debug, fix, or add a feature without writing files. Returns an evidence-grounded implementation plan, likely files, risks, tests, and open questions.",
+            "description": "Use this when the user and ChatGPT have already chosen an implementation goal. It plans how to execute that goal but never selects alternative work.",
             "inputKeys": [
               "goal",
               "include_globs",
@@ -720,81 +883,47 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when the user asks what to do next, what to prioritize, whether work is ready to ship, what to clean up, or how to choose focused solo-dev work. Returns advisory next actions from repo status, project brief, and task inventory.",
+            "description": "Use this when previewing a product-grounded Delegation v3 task before writing it. Use complete review-provided payloads for lineage children.",
             "inputKeys": [
-              "horizon",
-              "mode",
-              "repo_id",
-            ],
-            "name": "repo_next_action",
-            "outputKeys": [
-              "blockers",
-              "confidence",
-              "rationale",
-              "recommendation",
-              "suggested_actions",
-              "useful_context",
-              "warnings",
-            ],
-            "title": "Recommend next action",
-          },
-          {
-            "annotations": {
-              "destructiveHint": false,
-              "idempotentHint": true,
-              "openWorldHint": false,
-              "readOnlyHint": true,
-            },
-            "description": "Use this when the user asks for broad or ambiguous repository review. It estimates scope and suggests whether to ask a clarifying question before reading many files; for onboarding or daily planning prefer repo_project_brief first.",
-            "inputKeys": [
-              "prompt",
-            ],
-            "name": "repo_plan_review",
-            "outputKeys": [
-              "estimated_cost",
-              "explicit_full_repo",
-              "recommended_next_tools",
-              "recommended_scope",
-              "should_ask_clarifying_question",
-              "suggested_question",
-            ],
-            "title": "Plan repository review",
-          },
-          {
-            "annotations": {
-              "destructiveHint": false,
-              "idempotentHint": true,
-              "openWorldHint": false,
-              "readOnlyHint": true,
-            },
-            "description": "Use this when the user explicitly wants chat-copy mode: a Codex prompt returned in chat for review/copying. Does not write files or implement the change. Do not use when Codex will be told to implement .chatgpt/codex-runs/<run_id>/PROMPT.md; use repo_write_codex_task instead.",
-            "inputKeys": [
-              "acceptance_criteria",
-              "allowed_paths",
-              "context_summary",
+              "assignment",
+              "authorization_scope",
+              "explicit_exclusions",
               "forbidden_paths",
-              "implementation_scope",
-              "inspect_first",
-              "objective",
+              "hard_constraints",
+              "lineage",
+              "must_preserve",
+              "outcome",
+              "product_alignment",
+              "relevant_context",
               "repo_id",
               "run_id",
+              "runner",
+              "security_context",
+              "starting_points",
+              "task_kind",
+              "technical_acceptance_criteria",
+              "technical_context",
               "title",
-              "verification_commands",
+              "validation",
             ],
             "name": "repo_prepare_codex_task",
             "outputKeys": [
-              "codex_user_prompt",
+              "delegation_audit",
+              "lineage",
               "manifest_path",
-              "next_steps",
               "ok",
-              "prompt_markdown",
+              "product_contract_sha256",
               "prompt_path",
               "repo_id",
-              "result_path",
+              "result_json_path",
+              "review_gate_path",
+              "review_requirement",
               "run_id",
+              "schema_version",
+              "task_kind",
               "warnings",
             ],
-            "title": "Prepare Codex task prompt",
+            "title": "Prepare Delegation v3 task",
           },
           {
             "annotations": {
@@ -803,38 +932,52 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to create, write, start, resume, or hand off a repo-local Codex prompt/task/run that Codex will execute from the repo. Prefer this by default for repo-local Codex delegation. Writes only .chatgpt/codex-runs/<run_id>/PROMPT.md and run.json through repo write policy; does not implement, stage, commit, push, or run Codex.",
+            "description": "Use this when the user explicitly requests durable Codex or implementation-agent delegation. It writes bound Delegation v3 artifacts but never starts a runner, commits, or pushes.",
             "inputKeys": [
-              "acceptance_criteria",
-              "allowed_paths",
-              "context_summary",
+              "assignment",
+              "authorization_scope",
               "dry_run",
+              "explicit_exclusions",
               "forbidden_paths",
-              "implementation_scope",
-              "inspect_first",
-              "objective",
+              "hard_constraints",
+              "lineage",
+              "must_preserve",
+              "outcome",
+              "product_alignment",
               "reason",
+              "relevant_context",
               "repo_id",
               "run_id",
+              "runner",
+              "security_context",
+              "starting_points",
+              "task_kind",
+              "technical_acceptance_criteria",
+              "technical_context",
               "title",
-              "verification_commands",
+              "validation",
             ],
             "name": "repo_write_codex_task",
             "outputKeys": [
-              "codex_user_prompt",
+              "delegation_audit",
               "dry_run",
+              "lineage",
               "manifest_path",
-              "next_steps",
+              "next_tool_payloads",
               "ok",
-              "prompt_markdown",
+              "product_contract_sha256",
               "prompt_path",
               "repo_id",
-              "result_path",
+              "result_json_path",
+              "review_gate_path",
+              "review_requirement",
               "run_id",
+              "schema_version",
+              "task_kind",
               "warnings",
               "written_paths",
             ],
-            "title": "Write Codex task prompt",
+            "title": "Write Delegation v3 task",
           },
           {
             "annotations": {
@@ -843,7 +986,73 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": true,
             },
-            "description": "Use this when Codex has finished or the user asks to review a repo-local Codex run. Reads .chatgpt/codex-runs/<run_id>/RESULT.md and git diff review state without mutating files or git.",
+            "description": "Use this when inspecting agent lifecycle, runtime, questions, events, drift, or checkpoint state. It is read-only and never selects work.",
+            "inputKeys": [
+              "cursor",
+              "events_after",
+              "max_events",
+              "page_size",
+              "repo_id",
+              "run_id",
+              "statuses",
+              "wait_after_revision",
+              "wait_timeout_ms",
+            ],
+            "name": "repo_agent_runs",
+            "outputKeys": [
+              "drift_summary",
+              "matched_count",
+              "mode",
+              "next_cursor",
+              "next_tool_payloads",
+              "ok",
+              "repo_id",
+              "returned_count",
+              "revision",
+              "run",
+              "runs",
+              "supervisor",
+              "truncated",
+              "warnings",
+            ],
+            "title": "Inspect agent runs",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when answering the exact current structured questions for an awaiting-input run. It rejects stale or incomplete replies and only writes the reply artifact.",
+            "inputKeys": [
+              "answers",
+              "expected_question_sha256",
+              "repo_id",
+              "run_id",
+              "turn_index",
+            ],
+            "name": "repo_write_agent_reply",
+            "outputKeys": [
+              "agent_run",
+              "next_tool_payloads",
+              "ok",
+              "repo_id",
+              "run_id",
+              "turn_index",
+              "warnings",
+              "written_path",
+            ],
+            "title": "Reply to an agent run",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when an implementation agent has finished. It validates bound result, scope, Git state, TAC/PAC evidence, technical readiness, and product-review requirements without self-approving product claims.",
             "inputKeys": [
               "max_files",
               "repo_id",
@@ -851,15 +1060,28 @@ describe("MCP contract", () => {
             ],
             "name": "repo_codex_review",
             "outputKeys": [
+              "acceptance_evidence",
               "codex_result",
               "git_review",
+              "integrity",
+              "legacy_result_path",
               "next_steps",
               "next_tool_payloads",
               "ok",
+              "product_acceptance_evidence",
+              "product_evidence",
+              "product_review",
               "repo_id",
               "result_found",
-              "result_path",
+              "result_json_path",
+              "result_source",
+              "review_attestation",
+              "review_loop",
+              "review_state",
               "run_id",
+              "scope_evidence",
+              "technical_acceptance_evidence",
+              "technical_readiness",
               "warnings",
             ],
             "title": "Review Codex result",
@@ -871,12 +1093,334 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to write or precisely edit one allowed repository file. Primary low-friction single-file writer/editor for docs, notes, prompts, and focused code edits; requires user approval, repo opt-in, and never runs shell, git, or Codex.",
+            "description": "Use this when recording the state-bound qualitative review returned by repo_codex_review. It validates the exact state and writes review evidence without staging or committing.",
+            "inputKeys": [
+              "dry_run",
+              "evidence",
+              "expected_review_state_sha256",
+              "product_verdict",
+              "rationale",
+              "reason",
+              "repo_id",
+              "run_id",
+            ],
+            "name": "repo_write_codex_review",
+            "outputKeys": [
+              "dry_run",
+              "next_steps",
+              "ok",
+              "product_verdict",
+              "repo_id",
+              "review_gate_path",
+              "review_gate_sha256",
+              "review_path",
+              "review_requirement",
+              "review_sha256",
+              "review_state_sha256",
+              "reviewed_at",
+              "run_id",
+              "technical_readiness_status",
+              "warnings",
+              "written_paths",
+            ],
+            "title": "Write state-bound Codex review",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when the owner explicitly approves integrating multiple currently attested Delegation v3 runs in one worktree, and only for that integration case. It requires exact run, HEAD, pathset, validation, product-verdict, semantic, scope, and content state, then writes an opaque pathset for one atomic local commit; it is not a force or skip-review path.",
+            "inputKeys": [
+              "commit_message",
+              "dry_run",
+              "expected_head_sha",
+              "reason",
+              "repo_id",
+              "run_ids",
+              "validation_id",
+            ],
+            "name": "repo_write_integration_review",
+            "outputKeys": [
+              "dry_run",
+              "head_sha",
+              "integration_id",
+              "integration_path",
+              "next_tool_payloads",
+              "ok",
+              "path_count",
+              "pathset_fingerprint",
+              "repo_id",
+              "review_pathset_id",
+              "reviewed_paths",
+              "run_ids",
+              "validation_id",
+              "warnings",
+              "written_paths",
+            ],
+            "title": "Write multi-run integration review",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when preparing an atomic create, modify, edit, delete, or rename patchset. It writes only local manifest metadata, not target files.",
+            "inputKeys": [
+              "base_head_sha",
+              "files",
+              "intent",
+              "repo_id",
+              "work_session_id",
+            ],
+            "name": "repo_prepare_patchset",
+            "outputKeys": [
+              "affected_paths",
+              "manifest",
+              "manifest_path",
+              "next_tool_payloads",
+              "ok",
+              "patchset_id",
+              "warnings",
+            ],
+            "title": "Prepare patchset",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when applying a prepared patchset atomically with stale-state guards. A HEAD-bound apply returns first-class rollback guidance.",
+            "inputKeys": [
+              "dry_run",
+              "expected_head_sha",
+              "patchset_id",
+              "repo_id",
+            ],
+            "name": "repo_apply_patchset",
+            "outputKeys": [
+              "changed_paths",
+              "counts",
+              "created_paths",
+              "deleted_paths",
+              "dry_run",
+              "hunk_diagnostics",
+              "modified_paths",
+              "next_tool_payloads",
+              "ok",
+              "operation_id",
+              "operation_receipt",
+              "patchset_id",
+              "renamed_paths",
+              "rollback_hint",
+              "warnings",
+            ],
+            "title": "Apply patchset",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when reviewing a prepared or applied patchset and its ledger/Git state. It does not mutate files or Git.",
+            "inputKeys": [
+              "max_files",
+              "patchset_id",
+              "repo_id",
+            ],
+            "name": "repo_review_patchset",
+            "outputKeys": [
+              "applied",
+              "git_review",
+              "manifest",
+              "manifest_path",
+              "ok",
+              "patchset_id",
+              "rolled_back",
+              "warnings",
+            ],
+            "title": "Review patchset",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when the user explicitly approves rollback of an uncommitted, unchanged applied patchset. It requires the expected HEAD.",
+            "inputKeys": [
+              "dry_run",
+              "expected_head_sha",
+              "patchset_id",
+              "repo_id",
+            ],
+            "name": "repo_rollback_patchset",
+            "outputKeys": [
+              "counts",
+              "deleted_paths",
+              "dry_run",
+              "next_tool_payloads",
+              "ok",
+              "operation_id",
+              "operation_receipt",
+              "patchset_id",
+              "restored_paths",
+              "skipped",
+              "warnings",
+            ],
+            "title": "Rollback patchset",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when running an allowlisted test, build, lint, typecheck, smoke, or all profile. A declared repo-owned make target takes priority; npm and safe pytest are fallbacks. Output is streamed into a bounded tail without a shell or arbitrary commands.",
+            "inputKeys": [
+              "dry_run",
+              "profile",
+              "repo_id",
+              "test_paths",
+              "timeout_ms",
+            ],
+            "name": "repo_validate",
+            "outputKeys": [
+              "commands",
+              "counts",
+              "dry_run",
+              "focused",
+              "ok",
+              "profile",
+              "repo_id",
+              "status",
+              "test_paths",
+              "validation_artifact",
+              "validation_id",
+              "warnings",
+            ],
+            "title": "Validate repository",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when starting a focused multi-step slice that benefits from content-free local progress state.",
+            "inputKeys": [
+              "constraints",
+              "dry_run",
+              "files_inspected",
+              "next_action",
+              "objective",
+              "repo_id",
+              "title",
+              "touched_files",
+              "work_session_id",
+            ],
+            "name": "repo_start_work_session",
+            "outputKeys": [
+              "current_path",
+              "dry_run",
+              "next_tool_payloads",
+              "ok",
+              "session",
+              "session_path",
+              "warnings",
+              "work_session_id",
+            ],
+            "title": "Start work session",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when appending decisions, inspected or touched paths, validation refs, risks, status, or next action to a work session.",
+            "inputKeys": [
+              "append_assumptions",
+              "append_decisions",
+              "append_files_inspected",
+              "append_pending_patchsets",
+              "append_touched_files",
+              "append_unresolved_risks",
+              "append_validation_results",
+              "dry_run",
+              "next_action",
+              "repo_id",
+              "status",
+              "work_session_id",
+            ],
+            "name": "repo_update_work_session",
+            "outputKeys": [
+              "current_path",
+              "dry_run",
+              "next_tool_payloads",
+              "ok",
+              "session",
+              "session_path",
+              "warnings",
+              "work_session_id",
+            ],
+            "title": "Update work session",
+          },
+          {
+            "annotations": {
+              "destructiveHint": false,
+              "idempotentHint": true,
+              "openWorldHint": false,
+              "readOnlyHint": true,
+            },
+            "description": "Use this when resuming repository continuity. Current active or blocked work is full; completed history is compact unless work_session_id is supplied.",
+            "inputKeys": [
+              "repo_id",
+              "work_session_id",
+            ],
+            "name": "repo_current_work_session",
+            "outputKeys": [
+              "continuity_state",
+              "current_path",
+              "found",
+              "lookup_source",
+              "ok",
+              "repo_id",
+              "session",
+              "session_path",
+              "warnings",
+              "work_session_id",
+            ],
+            "title": "Read current work session",
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false,
+            },
+            "description": "Use this when directly creating or precisely editing one allowed repository file. It supports stale-state guards and never runs Git, Codex, or a shell.",
             "inputKeys": [
               "action",
               "content",
               "create_dirs",
               "dry_run",
+              "expected_head_sha",
+              "expected_missing",
+              "expected_old_sha256",
               "find",
               "path",
               "reason",
@@ -907,10 +1451,11 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user explicitly asks to apply a cohesive multi-file edit pack to allowed repository files. Primary low-friction multi-file writer/editor for full-file writes and exact-match edits; requires user approval, repo opt-in, and never runs shell, git, stage, commit, or restore.",
+            "description": "Use this when directly applying one cohesive multi-file write/edit pack. It supports stale-state guards and never stages, commits, restores, or runs a shell.",
             "inputKeys": [
               "changes",
               "dry_run",
+              "expected_head_sha",
               "reason",
               "repo_id",
             ],
@@ -935,7 +1480,7 @@ describe("MCP contract", () => {
               "openWorldHint": false,
               "readOnlyHint": false,
             },
-            "description": "Use this when the user asks for a local-only ChatGPT handoff: skapa handoff, create handoff, skriv handoff, session handoff, resume note, fortsättningsanteckning, ny chatt context, or överlämning till nästa chatt. Creates .chatgpt/handoffs/*.local.md and updates current.local.md; never stages, commits, pushes, resets, checks out, or runs shell commands.",
+            "description": "Use this when the user asks for a local-only ChatGPT handoff: skapa handoff, create handoff, skriv handoff, session handoff, or resume note. It writes .chatgpt/handoffs/*.local.md and updates current.local.md without Git mutation.",
             "inputKeys": [
               "completed_work",
               "constraints",
@@ -1000,7 +1545,42 @@ describe("MCP contract", () => {
     }
   });
 
-  test("repo_write_changes partial failure exposes safe diagnostics in error envelope", async () => {
+  test("public review tools default to compact and expose full only when requested", async () => {
+    const { client, close } = await connectFixtureServer();
+    try {
+      const compactGit = await client.callTool({
+        name: "repo_git_review",
+        arguments: { repo_id: "fixture" }
+      });
+      expect(compactGit.structuredContent).toMatchObject({ ok: true, detail: "compact" });
+
+      const fullGit = await client.callTool({
+        name: "repo_git_review",
+        arguments: { repo_id: "fixture", detail: "full" }
+      });
+      expect(fullGit.structuredContent).toMatchObject({ ok: true, detail: "full" });
+
+      const compactShip = await client.callTool({
+        name: "repo_ship_review",
+        arguments: { repo_id: "fixture" }
+      });
+      expect(compactShip.structuredContent).toMatchObject({ ok: true, detail: "compact" });
+      expect(compactShip.structuredContent).not.toHaveProperty("delegation_gate");
+      expect(compactShip.structuredContent).not.toHaveProperty("review_loop");
+
+      const fullShip = await client.callTool({
+        name: "repo_ship_review",
+        arguments: { repo_id: "fixture", detail: "full" }
+      });
+      expect(fullShip.structuredContent).toMatchObject({ ok: true, detail: "full" });
+      expect(fullShip.structuredContent).toHaveProperty("delegation_gate");
+      expect(fullShip.structuredContent).toHaveProperty("review_loop");
+    } finally {
+      await close();
+    }
+  });
+
+  test("repo_write_changes prevalidation prevents partial writes", async () => {
     const { client, close } = await connectFixtureServer();
     try {
       const result = await client.callTool({
@@ -1020,12 +1600,7 @@ describe("MCP contract", () => {
         ok: false,
         error: {
           code: "WRITE_FIND_NOT_FOUND",
-          retryable: false,
-          diagnostics: {
-            applied_paths: ["docs/applied-a.md", "docs/ARCHITECTURE.md"],
-            failed_path: "src/app.ts",
-            recovery_hint: expect.stringContaining("repo_git_review")
-          }
+          retryable: false
         }
       });
       const serialized = JSON.stringify(result.structuredContent);
@@ -1218,10 +1793,142 @@ describe("MCP contract", () => {
     }
   });
 
+  test("repo_validate tools/call runs an allowlisted validation profile", async () => {
+    const { client, close } = await connectFixtureServer();
+    try {
+      const result = await client.callTool({
+        name: "repo_validate",
+        arguments: {
+          repo_id: "fixture",
+          profile: "smoke"
+        }
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        repo_id: "fixture",
+        profile: "smoke",
+        dry_run: false,
+        status: "passed",
+        commands: [{
+          profile: "smoke",
+          script: "smoke",
+          command: "npm run smoke",
+          status: "passed",
+          exit_code: 0,
+          stdout_tail: expect.stringContaining("smoke ok")
+        }],
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        warnings: []
+      });
+      const definition = toolCatalog.find((tool) => tool.name === "repo_validate");
+      expect(definition?.outputSchema.safeParse(result.structuredContent).success).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  test("work session tools create, update, and read structured local state", async () => {
+    const { client, close } = await connectFixtureServer();
+    try {
+      const started = await client.callTool({
+        name: "repo_start_work_session",
+        arguments: {
+          repo_id: "fixture",
+          title: "MCP Work Session",
+          objective: "Track MCP contract progress.",
+          files_inspected: ["docs/ARCHITECTURE.md"],
+          next_action: "Update session"
+        }
+      });
+      expect(started.isError).toBeUndefined();
+      const workSessionId = String((started.structuredContent as { work_session_id: string }).work_session_id);
+
+      const updated = await client.callTool({
+        name: "repo_update_work_session",
+        arguments: {
+          repo_id: "fixture",
+          work_session_id: workSessionId,
+          append_decisions: ["Keep session content-free"],
+          append_touched_files: ["src/services/work-session-service.ts"],
+          next_action: "Read session"
+        }
+      });
+      expect(updated.isError).toBeUndefined();
+
+      const current = await client.callTool({
+        name: "repo_current_work_session",
+        arguments: { repo_id: "fixture" }
+      });
+
+      expect(current.isError).toBeUndefined();
+      expect(current.structuredContent).toMatchObject({
+        ok: true,
+        repo_id: "fixture",
+        found: true,
+        work_session_id: workSessionId,
+        session: {
+          objective: "Track MCP contract progress.",
+          files_inspected: ["docs/ARCHITECTURE.md"],
+          decisions: ["Keep session content-free"],
+          touched_files: ["src/services/work-session-service.ts"],
+          next_action: "Read session"
+        },
+        warnings: []
+      });
+      for (const name of ["repo_start_work_session", "repo_update_work_session", "repo_current_work_session"]) {
+        const definition = toolCatalog.find((tool) => tool.name === name);
+        const result = name === "repo_start_work_session" ? started : name === "repo_update_work_session" ? updated : current;
+        expect(definition?.outputSchema.safeParse(result.structuredContent).success, name).toBe(true);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("legacy v2 creation fields are rejected at the public schema boundary", async () => {
+    const { client, close } = await connectFixtureServer();
+    try {
+      const result = await client.callTool({
+        name: "repo_prepare_codex_task",
+        arguments: {
+          repo_id: "fixture",
+          title: "Legacy task",
+          objective: "Change exactly one file.",
+          inspect_first: ["src/app.ts"],
+          allowed_paths: ["src/app.ts"]
+        }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringMatching(/invalid|argument|schema/i)
+        })
+      ]));
+      const definition = toolCatalog.find((tool) => tool.name === "repo_prepare_codex_task");
+      expect(definition?.description).toContain("Delegation v3");
+      expect(definition?.inputSchema.safeParse({
+        repo_id: "fixture",
+        title: "Legacy task",
+        objective: "legacy"
+      }).success).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
   test("representative calls for every tool match their output schema", async () => {
     const { client, close, head } = await connectFixtureServer();
     try {
-      for (const [name, args] of Object.entries(representativeCalls(head))) {
+      const calls = {
+        ...representativeCalls(head),
+        repo_write_codex_review: await representativeReviewWriteArgs(client)
+      };
+      for (const [name, args] of Object.entries(calls)) {
         const result = await client.callTool({ name, arguments: args });
         expect(result.isError, name).toBeUndefined();
         expect(result.structuredContent, name).toBeDefined();
@@ -1238,7 +1945,149 @@ describe("MCP contract", () => {
       await close();
     }
   });
+
+  test("repo_rollback_patchset tools/call returns structuredContent matching the advertised output", async () => {
+    const { client, close, head } = await connectFixtureServer();
+    try {
+      const prepared = await client.callTool({
+        name: "repo_prepare_patchset",
+        arguments: {
+          repo_id: "fixture",
+          intent: "Rollback MCP contract",
+          base_head_sha: head,
+          files: [
+            {
+              path: "docs/ARCHITECTURE.md",
+              operation: "modify",
+              content: "# Architecture\nDecision: allow rollback.\nConvention: use contracts first.\n",
+              expected_old_sha256: sha256("# Architecture\nDecision: keep tools read-only.\nConvention: use contracts first.\n")
+            },
+            {
+              path: "docs/rollback-mcp.md",
+              operation: "create",
+              content: "Rollback\n",
+              expected_missing: true
+            }
+          ]
+        }
+      });
+      const patchsetId = String((prepared.structuredContent as { patchset_id: string }).patchset_id);
+      const applied = await client.callTool({
+        name: "repo_apply_patchset",
+        arguments: { repo_id: "fixture", patchset_id: patchsetId, expected_head_sha: head }
+      });
+      expect(applied.isError).toBeUndefined();
+
+      const result = await client.callTool({
+        name: "repo_rollback_patchset",
+        arguments: {
+          repo_id: "fixture",
+          patchset_id: patchsetId,
+          expected_head_sha: head,
+          dry_run: true
+        }
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        dry_run: true,
+        patchset_id: patchsetId,
+        restored_paths: ["docs/ARCHITECTURE.md"],
+        deleted_paths: ["docs/rollback-mcp.md"],
+        counts: { restored: 1, deleted: 1, skipped: 0 }
+      });
+      const definition = toolCatalog.find((tool) => tool.name === "repo_rollback_patchset");
+      expect(definition?.outputSchema.safeParse(result.structuredContent).success).toBe(true);
+    } finally {
+      await close();
+    }
+  });
 });
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+async function representativeReviewWriteArgs(client: Client): Promise<Record<string, unknown>> {
+  const runId = "2026-07-19T132500Z-representative-review";
+  const task = await client.callTool({
+    name: "repo_write_codex_task",
+    arguments: {
+      repo_id: "fixture",
+      run_id: runId,
+      title: "Representative review attestation",
+      task_kind: "technical_infrastructure",
+      assignment: "Create a technically complete no-change review fixture.",
+      outcome: {
+        beneficiary: "Repository operator",
+        current_problem: "The review-write MCP output needs a live contract fixture.",
+        desired_outcome: "A state-bound technical-only review can be dry-run through MCP.",
+        why_now: "The RNV-03B public tool is being verified."
+      },
+      technical_context: {
+        enabling_value: "Verify the state-bound review-write tool without mutating project files."
+      },
+      starting_points: ["docs/ARCHITECTURE.md"],
+      authorization_scope: ["docs/**"],
+      forbidden_paths: [],
+      hard_constraints: ["Do not change project content."],
+      must_preserve: ["Git happy paths remain closed."],
+      explicit_exclusions: ["Do not push."],
+      technical_acceptance_criteria: ["The no-change technical result is strictly bound."],
+      runner: { mode: "manual" }
+    }
+  });
+  expect(task.isError).toBeUndefined();
+  const taskOutput = task.structuredContent as { result_json_path: string };
+  const resultJson = {
+    schema_version: 3,
+    repo_id: "fixture",
+    run_id: runId,
+    status: "completed",
+    summary: "Completed the no-change technical review fixture.",
+    changed_files: [],
+    connected_changes: [],
+    commands_run: [],
+    tests: [],
+    product_acceptance_criteria: [],
+    technical_acceptance_criteria: [{
+      id: "TAC-1",
+      status: "passed",
+      evidence: "The strict no-change result matches the manifest."
+    }],
+    scope_extension_required: [],
+    blockers: [],
+    followups: []
+  };
+  const resultWrite = await client.callTool({
+    name: "repo_write_file",
+    arguments: {
+      repo_id: "fixture",
+      path: taskOutput.result_json_path,
+      content: `${JSON.stringify(resultJson, null, 2)}\n`,
+      expected_missing: true
+    }
+  });
+  expect(resultWrite.isError).toBeUndefined();
+  const review = await client.callTool({
+    name: "repo_codex_review",
+    arguments: { repo_id: "fixture", run_id: runId }
+  });
+  expect(review.isError).toBeUndefined();
+  const state = (review.structuredContent as { review_state: { status: string; state_sha256?: string } }).review_state;
+  expect(state.status).toBe("available");
+  expect(state.state_sha256).toMatch(/^[a-f0-9]{64}$/);
+  return {
+    repo_id: "fixture",
+    run_id: runId,
+    expected_review_state_sha256: state.state_sha256,
+    product_verdict: "not_applicable",
+    rationale: "The manifest is technical-only and the deterministic technical review passed.",
+    evidence: [],
+    dry_run: true
+  };
+}
 
 function representativeCalls(head: string): Record<string, Record<string, unknown>> {
   return {
@@ -1248,39 +2097,87 @@ function representativeCalls(head: string): Record<string, Record<string, unknow
   repo_search: { repo_id: "fixture", query: "Fixture", max_results: 5 },
   repo_fetch_file: { repo_id: "fixture", path: "README.md", start_line: 1, end_line: 5 },
   repo_read_many: { repo_id: "fixture", paths: ["README.md", "src/app.ts"], max_files: 2 },
+  repo_symbol_context: { repo_id: "fixture", paths: ["src/app.ts"], max_files: 20 },
+  repo_code_index: { repo_id: "fixture", action: "status" },
+  repo_failure_diagnose: { repo_id: "fixture", max_diagnostics: 10, max_candidates: 5 },
+  repo_semantic_review: { repo_id: "fixture", max_findings: 10, max_files: 20 },
+  repo_ship_review: { repo_id: "fixture", max_findings: 10, max_files: 20 },
   repo_git_status: { repo_id: "fixture" },
   repo_git_diff: { repo_id: "fixture" },
   repo_git_review: { repo_id: "fixture" },
-  repo_git_stage: { repo_id: "fixture", paths: ["docs/write-dry-run.md"], expected_head_sha: head, dry_run: true },
-  repo_git_unstage: { repo_id: "fixture", paths: ["docs/staged.md"], expected_head_sha: head, dry_run: true },
   repo_git_restore_paths: { repo_id: "fixture", paths: ["docs/write-dry-run.md"], expected_head_sha: head, dry_run: true },
-  repo_git_commit: { repo_id: "fixture", message: "Update staged docs", expected_head_sha: head, expected_staged_paths: ["docs/staged.md"], dry_run: true },
   repo_write_stage: { repo_id: "fixture", paths: ["docs/write-dry-run.md"], expected_head_sha: head, dry_run: true },
   repo_write_unstage: { repo_id: "fixture", paths: ["docs/staged.md"], expected_head_sha: head, dry_run: true },
   repo_write_commit: { repo_id: "fixture", message: "Update staged docs", expected_head_sha: head, expected_staged_paths: ["docs/staged.md"], dry_run: true },
   repo_write_stage_commit: { repo_id: "fixture", paths: ["docs/staged.md"], message: "Update staged docs", expected_head_sha: head, dry_run: true },
   repo_write_recover: { repo_id: "fixture", restore_paths: ["docs/write-dry-run.md"], cleanup_paths: [".chatgpt/tool-tests/cleanup.txt"], expected_head_sha: head, dry_run: true },
   repo_cleanup_paths: { repo_id: "fixture", paths: [".chatgpt/tool-tests/cleanup.txt"], dry_run: true },
+  repo_validate: { repo_id: "fixture", profile: "smoke", dry_run: true },
+  repo_start_work_session: {
+    repo_id: "fixture",
+    work_session_id: "representative-work-session",
+    title: "Representative Work Session",
+    objective: "Track representative MCP calls.",
+    next_action: "Update representative work session"
+  },
+  repo_update_work_session: {
+    repo_id: "fixture",
+    work_session_id: "representative-work-session",
+    append_decisions: ["Representative decision"],
+    next_action: "Read representative work session"
+  },
+  repo_current_work_session: {
+    repo_id: "fixture"
+  },
   repo_project_brief: { repo_id: "fixture" },
   repo_task_inventory: { repo_id: "fixture", max_results: 5 },
   repo_decision_memory: { repo_id: "fixture" },
   repo_change_plan: { repo_id: "fixture", goal: "Add fixture validation", planning_depth: "quick" },
-  repo_next_action: { repo_id: "fixture", mode: "plan", horizon: "today" },
-  repo_plan_review: { prompt: "Granska mina ändringar" },
   repo_prepare_codex_task: {
     repo_id: "fixture",
-    title: "Fix fixture docs",
-    objective: "Read docs/ARCHITECTURE.md and propose a focused Codex implementation.",
-    inspect_first: ["docs/ARCHITECTURE.md"],
-    allowed_paths: ["docs/ARCHITECTURE.md"],
-    verification_commands: ["npm test -- tests/mcp-contract.test.ts"]
+    title: "Strengthen fixture delegation",
+    task_kind: "technical_infrastructure",
+    assignment: "Create a coherent technical outcome without prescribing every internal implementation step.",
+    outcome: {
+      beneficiary: "Repository operator",
+      current_problem: "The fixture lacks a product-aware delegation contract.",
+      desired_outcome: "The repository can prepare a bounded v3 task with explicit operational value.",
+      why_now: "The public task surface is being verified after the v3 cutover."
+    },
+    technical_context: {
+      enabling_value: "Provide one safe and reviewable delegation contract for repository work."
+    },
+    starting_points: ["docs/ARCHITECTURE.md"],
+    authorization_scope: ["docs/**"],
+    forbidden_paths: [],
+    hard_constraints: ["Preserve existing repository safety boundaries."],
+    must_preserve: ["Historical v1 and v2 runs remain reviewable."],
+    explicit_exclusions: ["Do not add arbitrary shell execution."],
+    technical_acceptance_criteria: ["The task validates against the public v3 contract."],
+    runner: { mode: "manual" }
   },
   repo_write_codex_task: {
     repo_id: "fixture",
-    title: "Fix fixture docs",
-    objective: "Read docs/ARCHITECTURE.md and propose a focused Codex implementation.",
-    inspect_first: ["docs/ARCHITECTURE.md"],
-    allowed_paths: ["docs/ARCHITECTURE.md"],
+    title: "Strengthen fixture delegation",
+    task_kind: "technical_infrastructure",
+    assignment: "Create a coherent technical outcome without prescribing every internal implementation step.",
+    outcome: {
+      beneficiary: "Repository operator",
+      current_problem: "The fixture lacks a product-aware delegation contract.",
+      desired_outcome: "The repository can write a bounded v3 task with explicit operational value.",
+      why_now: "The public task surface is being verified after the v3 cutover."
+    },
+    technical_context: {
+      enabling_value: "Provide one safe and reviewable delegation contract for repository work."
+    },
+    starting_points: ["docs/ARCHITECTURE.md"],
+    authorization_scope: ["docs/**"],
+    forbidden_paths: [],
+    hard_constraints: ["Preserve existing repository safety boundaries."],
+    must_preserve: ["Historical v1 and v2 runs remain reviewable."],
+    explicit_exclusions: ["Do not add arbitrary shell execution."],
+    technical_acceptance_criteria: ["The task validates against the public v3 contract."],
+    runner: { mode: "manual" },
     dry_run: true
   },
   repo_codex_review: {
@@ -1327,7 +2224,8 @@ async function connectFixtureServer() {
         enabled: true,
         git_stage_enabled: true,
         git_commit_enabled: true,
-        cleanup_enabled: true
+        cleanup_enabled: true,
+        validation_enabled: true
       }
     }],
     limits: {}
@@ -1363,7 +2261,8 @@ async function createRepoRoot() {
     type: "module",
     scripts: {
       build: "tsc",
-      test: "vitest"
+      test: "vitest",
+      smoke: "node -e \"console.log('smoke ok')\""
     },
     dependencies: {
       "@modelcontextprotocol/sdk": "^1.0.0"

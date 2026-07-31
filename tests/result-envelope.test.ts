@@ -27,8 +27,9 @@ describe("result envelope", () => {
     const result = createErrorEnvelope(new RepoReaderError("WRITE_FIND_NOT_FOUND", "find text was not found in src/c.ts.", {
       diagnostics: {
         applied_paths: ["src/a.ts", "/Users/example/repo/src/absolute.ts"],
+        rolled_back_paths: ["docs/new.md", "../outside.md"],
         failed_path: "src/c.ts",
-        recovery_hint: "Run repo_git_review, then use repo_git_restore_paths for tracked applied paths or repo_cleanup_paths for generated untracked artifacts.",
+        recovery_hint: "Run repo_git_review and use its repo_write_recover payload for paths whose rollback failed.",
         content: "OPENAI_API_KEY=sk-secret",
         diff: "@@ secret",
         stack: "Error at /Users/example/repo/src/c.ts",
@@ -38,8 +39,9 @@ describe("result envelope", () => {
 
     expect(result.structuredContent.error.diagnostics).toEqual({
       applied_paths: ["src/a.ts"],
+      rolled_back_paths: ["docs/new.md"],
       failed_path: "src/c.ts",
-      recovery_hint: "Run repo_git_review, then use repo_git_restore_paths for tracked applied paths or repo_cleanup_paths for generated untracked artifacts."
+      recovery_hint: "Run repo_git_review and use its repo_write_recover payload for paths whose rollback failed."
     });
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("OPENAI_API_KEY");

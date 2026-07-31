@@ -2,6 +2,7 @@ import { HandoffInputSchema, type HandoffInput, type HandoffResult, type Handoff
 import { RepoReaderError } from "../runtime/errors.js";
 import { FileWriter } from "./file-writer.js";
 import type { GitService } from "./git-service.js";
+import { formatLocalHandoffMinuteTimestamp, slugifyLabel } from "./local-id.js";
 import { PathSandbox, validateRepoPath } from "./path-sandbox.js";
 import { WritePolicy } from "./write-policy.js";
 
@@ -75,27 +76,7 @@ export class HandoffService {
 }
 
 function detailedHandoffPath(title: string, date: Date): string {
-  const day = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0")
-  ].join("-");
-  const time = [
-    String(date.getHours()).padStart(2, "0"),
-    String(date.getMinutes()).padStart(2, "0")
-  ].join("");
-  return `${HANDOFF_DIR}/${day}-${time}-${slugify(title)}.local.md`;
-}
-
-function slugify(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
-  return slug || "handoff";
+  return `${HANDOFF_DIR}/${formatLocalHandoffMinuteTimestamp(date)}-${slugifyLabel(title, "handoff")}.local.md`;
 }
 
 function assertHandoffPath(path: string): void {

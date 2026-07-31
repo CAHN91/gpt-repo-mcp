@@ -11,3 +11,17 @@ export const writeAnnotations = {
   openWorldHint: false,
   idempotentHint: false
 } as const;
+
+export const safeMutationAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: false,
+  idempotentHint: true
+} as const;
+
+export const nonDestructiveMutationAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: false,
+  idempotentHint: false
+} as const;

@@ -18,6 +18,8 @@ describe("PolicyExplainService", () => {
         enabled: true,
         git_stage_enabled: true,
         git_commit_enabled: true,
+        validation_enabled: true,
+        validation_test_path_globs: [],
         max_paths_per_operation: 50,
         cleanup_enabled: true,
         cleanup_allowed_globs: [".chatgpt/tool-tests/**"]
@@ -55,6 +57,8 @@ describe("PolicyExplainService", () => {
         enabled: false,
         git_stage_enabled: false,
         git_commit_enabled: false,
+        validation_enabled: false,
+        validation_test_path_globs: [],
         max_paths_per_operation: 50,
         cleanup_enabled: false,
         cleanup_allowed_globs: [".chatgpt/tool-tests/**"]
@@ -92,6 +96,8 @@ describe("PolicyExplainService", () => {
         enabled: false,
         git_stage_enabled: false,
         git_commit_enabled: false,
+        validation_enabled: false,
+        validation_test_path_globs: [],
         max_paths_per_operation: 50,
         cleanup_enabled: false,
         cleanup_allowed_globs: [".chatgpt/tool-tests/**"]
@@ -112,7 +118,7 @@ describe("PolicyExplainService", () => {
       allowed: false,
       code: "OPERATIONS_DISABLED"
     });
-    expect(result.guidance).toContain("Use --mode ship for trusted repositories when local stage, commit, recover, and cleanup operations should be enabled.");
+    expect(result.guidance).toContain("Use --mode ship for trusted repositories when local validation, stage, commit, recover, and cleanup operations should be enabled.");
   });
 
   test("explains cleanup allowed globs and tracked-file caveat", () => {
@@ -130,6 +136,8 @@ describe("PolicyExplainService", () => {
         enabled: true,
         git_stage_enabled: true,
         git_commit_enabled: true,
+        validation_enabled: true,
+        validation_test_path_globs: [],
         max_paths_per_operation: 50,
         cleanup_enabled: true,
         cleanup_allowed_globs: [".chatgpt/tool-tests/**"]
@@ -144,5 +152,39 @@ describe("PolicyExplainService", () => {
       matched_globs: [".chatgpt/tool-tests/**"]
     });
     expect(result.cleanup.notes).toContain("Cleanup refuses tracked files and does not run git clean.");
+  });
+
+  test("explains validation operation as a first-class policy focus", () => {
+    const service = new PolicyExplainService({
+      repo_id: "demo",
+      display_name: "Demo",
+      root: "/repo",
+      writes: {
+        enabled: true,
+        allowed_globs: ["**"],
+        denied_globs: DEFAULT_WRITE_POLICY.denied_globs,
+        max_bytes_per_write: 1048576
+      },
+      operations: {
+        enabled: true,
+        git_stage_enabled: true,
+        git_commit_enabled: true,
+        validation_enabled: false,
+        validation_test_path_globs: [],
+        max_paths_per_operation: 50,
+        cleanup_enabled: true,
+        cleanup_allowed_globs: [".chatgpt/tool-tests/**"]
+      }
+    });
+
+    const result = service.explain({ operation: "validation" });
+
+    expect(result.requested_operation).toBe("validation");
+    expect(result.summary).toContain("validation policy for this repository");
+    expect(result.validation).toMatchObject({
+      allowed: false,
+      code: "VALIDATION_DISABLED"
+    });
+    expect(result.guidance).toContain("Enable operations.validation_enabled for trusted repositories that should run allowlisted validation profiles.");
   });
 });

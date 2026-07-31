@@ -1,6 +1,4 @@
 .chatgpt/
-.agent-recorder/
-.agentbus/
 config.local.json
 *.local.json
 .env

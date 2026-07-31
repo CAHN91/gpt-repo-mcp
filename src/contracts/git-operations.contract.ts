@@ -34,11 +34,16 @@ export const GitCommitInputSchema = RepoInputSchema.extend({
 });
 
 export const GitStageCommitInputSchema = RepoInputSchema.extend({
-  paths: GitPathsSchema,
+  paths: GitPathsSchema.optional().describe("Explicit repo-relative paths for the normal review flow. Omit when review_pathset_id is supplied."),
+  review_pathset_id: z.string().regex(/^integration-[A-Za-z0-9-]{1,160}$/).optional().describe("Opaque server-owned integration pathset created by repo_write_integration_review."),
   message: z.string().min(1).describe("Local git commit message only. Shell syntax, command chaining, and git flags are not accepted."),
   expected_head_sha: ExpectedHeadSchema,
   dry_run: z.boolean().optional().describe("Validate stage-and-commit inputs without changing the git index, worktree, or HEAD."),
   reason: z.string().min(1).optional().describe("Short human-readable reason for the reviewed stage-and-commit request, useful for audit context.")
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.paths) === Boolean(value.review_pathset_id)) {
+    context.addIssue({ code: "custom", path: ["paths"], message: "Provide exactly one of paths or review_pathset_id." });
+  }
 });
 
 const OptionalGitPathsSchema = z.array(z.string().min(1)).optional();
@@ -48,6 +53,7 @@ export const GitRecoverInputSchema = RepoInputSchema.extend({
   unstage_paths: OptionalGitPathsSchema.describe("Explicit repo-relative paths to unstage from the git index before restore or cleanup."),
   restore_paths: OptionalGitPathsSchema.describe("Explicit repo-relative tracked worktree paths to restore with git restore -- <paths>."),
   cleanup_paths: OptionalGitPathsSchema.describe("Explicit repo-relative generated artifact paths to delete through cleanup policy."),
+  discard_paths: OptionalGitPathsSchema.describe("Explicit repo-relative safe untracked files to delete after review."),
   dry_run: z.boolean().optional().describe("Validate the reviewed recovery workflow without changing the git index, worktree, or filesystem."),
   reason: z.string().min(1).optional().describe("Short human-readable reason for the reviewed recovery request, useful for audit context.")
 });
@@ -105,6 +111,7 @@ export const GitStageCommitResultSchema = z.object({
   head_before: z.string().describe("HEAD SHA verified before staging and commit."),
   head_after: z.string().optional().describe("New HEAD SHA after a successful local commit."),
   commit_sha: z.string().optional().describe("SHA of the local commit that was created."),
+  review_pathset_id: z.string().optional().describe("Opaque reviewed integration pathset used for this operation, when applicable."),
   staged_paths: z.array(z.string()).describe("Explicit repo-relative paths staged or that would be staged."),
   committed_paths: z.array(z.string()).describe("Exact repo-relative paths committed or that would be committed."),
   remaining_changes: z.number().int().nonnegative().optional().describe("Best-effort count of remaining changed paths after commit."),
@@ -119,6 +126,7 @@ export const GitRecoverResultSchema = z.object({
   unstaged_paths: z.array(z.string()).describe("Explicit repo-relative paths unstaged, or that would be unstaged during dry-run."),
   restored_paths: z.array(z.string()).describe("Explicit repo-relative tracked paths restored, or that would be restored during dry-run."),
   deleted: z.array(GitOperationDeletedSchema).describe("Explicit generated artifact paths deleted, or previewed during dry-run."),
+  discarded: z.array(GitOperationDeletedSchema).describe("Explicit safe untracked files discarded, or previewed during dry-run."),
   skipped: z.array(GitOperationSkippedSchema).describe("Explicit paths that were not recovered and the reason for each skip."),
   remaining_changes: z.number().int().nonnegative().optional().describe("Best-effort count of remaining changed paths after recovery."),
   clean_after: z.boolean().optional().describe("Best-effort indication of whether the repository was clean after recovery."),

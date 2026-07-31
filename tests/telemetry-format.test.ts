@@ -135,12 +135,13 @@ describe("telemetry log formatting", () => {
         route: "/mcp",
         status_code: 500,
         duration_ms: 4,
+        error_category: "transport_request",
         mcp_method: "tools/call",
         mcp_tool: "repo_write_stage"
       });
     });
 
-    expect(line).toBe("x 500 POST /mcp 4ms tools/call repo_write_stage req=a91f0c2b");
+    expect(line).toBe("x 500 POST /mcp 4ms category=transport_request tools/call repo_write_stage req=a91f0c2b");
   });
 
   test("pretty mode redacts and caps malicious MCP labels", () => {

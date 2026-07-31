@@ -10,6 +10,7 @@ describe("package startup scripts", () => {
     const pkg = JSON.parse(raw) as {
       bin?: Record<string, string>;
       engines?: Record<string, string>;
+      devDependencies?: Record<string, string>;
       keywords?: string[];
       scripts?: Record<string, string>;
     };
@@ -23,7 +24,9 @@ describe("package startup scripts", () => {
     expect(pkg.scripts?.mcp).toBe("GPT_REPO_CONFIG=./config.local.json PORT=8787 npm run dev");
     expect(pkg.scripts?.tunnel).toContain("--log=stdout");
     expect(pkg.scripts?.connect).toBe("node scripts/connect-dev.mjs");
+    expect(pkg.scripts?.["connect:cloudflare"]).toBe("PORT=8788 node scripts/connect-cloudflare.mjs");
     expect(pkg.scripts?.["connect:secure"]).toBe("node scripts/connect-secure.mjs");
+    expect(pkg.scripts?.["security:scan"]).toBe("node scripts/oss-security-scan.mjs");
     expect(pkg.scripts?.add).toBe("node dist/cli/connect-gpt.js add");
     expect(pkg.scripts?.remove).toBe("node dist/cli/connect-gpt.js remove");
     expect(pkg.scripts?.list).toBe("node dist/cli/connect-gpt.js list");
@@ -43,6 +46,20 @@ describe("package startup scripts", () => {
     expect(script).toContain("ChatGPT MCP URL");
     expect(script).toContain("Reusing existing ngrok tunnel");
     expect(script).toContain("readNgrokHttpsUrl");
+  });
+
+  test("includes Cloudflare tunnel startup script", async () => {
+    const scriptPath = join(process.cwd(), "scripts", "connect-cloudflare.mjs");
+    await expect(access(scriptPath)).resolves.toBeUndefined();
+    const script = await readFile(scriptPath, "utf8");
+    expect(script).toContain("cloudflared");
+    expect(script).toContain("tunnel");
+    expect(script).toContain("--url");
+    expect(script).toContain("GPT_REPO_PUBLIC_PATH_TOKEN");
+    expect(script).toContain("/t/${publicPathToken}/mcp");
+    expect(script).toContain("trycloudflare\\.com");
+    expect(script).toContain("ChatGPT MCP URL");
+    expect(script).toContain("This is guess-resistance only, not authentication");
   });
 
   test("includes secure tunnel startup script and env example", async () => {
@@ -74,19 +91,20 @@ describe("package startup scripts", () => {
     expect(connectionOptions).toContain("tunnel-client run --profile <profile>");
   });
 
-  test("public hygiene script blocks historical docs and local-only artifacts", async () => {
+  test("public hygiene script blocks local-only artifacts and stale public claims", async () => {
     const script = await readFile(join(process.cwd(), "scripts", "check-public.mjs"), "utf8");
 
     expect(script).toContain("git");
     expect(script).toContain("ls-files");
-    expect(script).toContain("MASTER_PROMPT.md");
-    expect(script).toContain("docs/CHATGPT_DEV_MODE.md");
-    expect(script).toContain("AGENTS.md");
+    expect(script).toContain("tools/");
     expect(script).toContain("config.local.json");
     expect(script).toContain(".gitignore");
+    expect(script).toContain(".gitleaks.toml");
+    expect(script).toContain(".gitleaksignore");
+    expect(script).toContain("security/");
     expect(script).toContain(".chatgpt/");
-    expect(script).toContain(".agent-recorder/");
-    expect(script).toContain(".agentbus/");
+    expect(script).toContain("read-only TypeScript MCP server");
+    expect(script).toContain("/Users/");
   });
 
   test("public hygiene script rejects any tracked .chatgpt artifact", async () => {
@@ -125,7 +143,7 @@ describe("package startup scripts", () => {
   test("gitignore uses public-safe local artifact wording", async () => {
     const gitignore = await readFile(join(process.cwd(), ".gitignore"), "utf8");
 
-    expect(gitignore).toContain("# Local agent artifacts");
+    expect(gitignore).toContain("# Local GPT Repo MCP artifacts");
     expect(gitignore).toContain(".chatgpt/");
     expect(gitignore).not.toContain("Agent Recorder");
   });

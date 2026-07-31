@@ -748,6 +748,28 @@ describe("GitOperationsService", () => {
     await expect(worktreePaths(fixture.root)).resolves.toEqual([]);
   });
 
+  test("recover rejects duplicate paths across mutating phases before changing anything", async () => {
+    const fixture = await createRecoverFixture({ changedPath: "docs/a.md", cleanupArtifact: true });
+    const service = createService(fixture.root);
+    await writeFile(join(fixture.root, "docs", "b.md"), "B changed\n");
+    await git(fixture.root, ["add", "--", "docs/b.md"]);
+
+    await expect(service.recover({
+      unstage_paths: ["docs/b.md"],
+      restore_paths: ["docs/a.md"],
+      cleanup_paths: [".chatgpt/tool-tests/recover.txt"],
+      discard_paths: [".chatgpt/tool-tests/recover.txt"],
+      expected_head_sha: fixture.head
+    })).rejects.toMatchObject({
+      code: "GIT_OPERATION_UNSAFE_PATHSPEC",
+      diagnostics: { failed_path: ".chatgpt/tool-tests/recover.txt" }
+    });
+
+    await expect(stagedPaths(fixture.root)).resolves.toEqual(["docs/b.md"]);
+    await expect(readFile(join(fixture.root, "docs", "a.md"), "utf8")).resolves.toBe("A changed\n");
+    await expect(readFile(join(fixture.root, ".chatgpt", "tool-tests", "recover.txt"), "utf8")).resolves.toBe("temporary\n");
+  });
+
   test("recover rejects stale expected_head_sha", async () => {
     const fixture = await createRecoverFixture();
     const service = createService(fixture.root);

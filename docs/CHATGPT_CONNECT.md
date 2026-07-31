@@ -97,7 +97,7 @@ Replace `<repo_id>` with one of the repository ids returned by the first prompt.
 
 The default setup is read-mostly. `repo_write_file`, safe git operations, and cleanup tools are disabled by default unless repo-local config opts in.
 
-When mutating tools are enabled, ChatGPT requires confirmation for write, git, or cleanup actions unless you choose to remember approval for the conversation.
+When mutating tools are enabled, the ChatGPT host approval UI confirms write, validation, git, or cleanup actions unless you choose to remember approval for the conversation.
 
 ## Connection Options
 

@@ -11,22 +11,24 @@ const PolicyDecisionSchema = z.object({
 
 export const PolicyExplainInputSchema = RepoInputSchema.extend({
   path: z.string().optional().describe("Optional repo-relative POSIX path to explain, for example README.md or app/page.tsx."),
-  operation: z.enum(["read", "write", "cleanup"]).optional().describe("Optional policy area to focus on. Omit to explain read, write, cleanup, and git operation settings together.")
+  operation: z.enum(["read", "write", "cleanup", "validation"]).optional().describe("Optional policy area to focus on. Omit to explain read, write, cleanup, validation, and git operation settings together.")
 });
 
 export const PolicyExplainResultSchema = z.object({
   ok: z.literal(true).describe("True when policy explanation succeeded."),
   repo_id: z.string().describe("Approved repository id that was explained."),
   path: z.string().optional().describe("Normalized repo-relative path that was checked, when a path was supplied."),
-  requested_operation: z.enum(["read", "write", "cleanup"]).optional().describe("Policy area requested by the caller, when provided."),
+  requested_operation: z.enum(["read", "write", "cleanup", "validation"]).optional().describe("Policy area requested by the caller, when provided."),
   summary: z.string().describe("One-sentence explanation of the most relevant policy result."),
   read: PolicyDecisionSchema.describe("Read policy decision for the path, or general read-policy status when no path was supplied."),
   write: PolicyDecisionSchema.describe("Write policy decision for the path, or general write-policy status when no path was supplied."),
   cleanup: PolicyDecisionSchema.describe("Cleanup policy decision for the path, or general cleanup-policy status when no path was supplied."),
+  validation: PolicyDecisionSchema.describe("Validation policy decision for this repository."),
   operations: z.object({
     enabled: z.boolean().describe("Whether local repository operations are enabled."),
     git_stage_enabled: z.boolean().describe("Whether local git stage and unstage operations are enabled."),
     git_commit_enabled: z.boolean().describe("Whether local git commit operations are enabled."),
+    validation_enabled: z.boolean().describe("Whether allowlisted local validation profiles are enabled."),
     cleanup_enabled: z.boolean().describe("Whether local cleanup operations are enabled."),
     max_paths_per_operation: z.number().int().positive().describe("Maximum explicit paths accepted by one local operation.")
   }).describe("Effective local operation policy toggles for this repository."),

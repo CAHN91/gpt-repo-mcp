@@ -67,7 +67,9 @@ npm install
 
 ## Build
 
-Run `npm run build`.
+Run `npm run build`. Before a release or packaged deployment, run
+`npm run verify:dist` to rebuild, start the real `dist/server.js` artifact,
+and verify its `/health` endpoint.
 
 ## Create Local Config
 
@@ -91,7 +93,7 @@ npm run add -- /path/to/your/repo --mode ship
 
 - `read`: read-only tools.
 - `write`: read tools plus broad repo-local writes guarded by hard denied paths, secret checks, path sandboxing, and size limits.
-- `ship`: write mode plus local git stage, commit, recover, and cleanup operations.
+- `ship`: write mode plus local validation, git stage, commit, recover, and cleanup operations.
 
 No mode enables push, pull, reset, checkout, switch, rebase, merge, stash, clean, force, branch deletion, shell execution, or arbitrary command execution.
 
@@ -101,7 +103,7 @@ Permission mode summary:
 | --- | --- |
 | `read` | Read-only repository tools; writes and local operations stay disabled. |
 | `write` | Read tools plus broad repo-local writes guarded by hard denied paths, secret checks, path sandboxing, and size limits. |
-| `ship` | Same write policy as `write`, plus local stage, commit, recover, and cleanup operations. |
+| `ship` | Same write policy as `write`, plus local validation, stage, commit, recover, and cleanup operations. |
 
 ## List Repositories
 
@@ -118,6 +120,34 @@ Run `npm run remove -- <repo_id>`. The `gpt-repo` binary is also available when 
 ## Check Config
 
 Run `npm run check:config`.
+
+Configuration objects are strict at every level. Unknown top-level, repository,
+write-policy, operations-policy, and limits fields are rejected so a misspelled
+permission or limit cannot silently fall back to its default. Correct the
+reported key before using `add`, `list`, `check`, `doctor`, or starting the
+server.
+
+## Repository-owned validation profiles
+
+A repository can declare canonical allowlisted `make` targets under its `operations` config. Declared profiles take precedence over npm and pytest detection:
+
+```json
+{
+  "operations": {
+    "enabled": true,
+    "validation_enabled": true,
+    "validation_profiles": {
+      "test": { "runner": "make", "target": "test" },
+      "lint": { "runner": "make", "target": "lint" },
+      "typecheck": { "runner": "make", "target": "typecheck" },
+      "smoke": { "runner": "make", "target": "smoke" },
+      "all": { "runner": "make", "target": "verify" }
+    }
+  }
+}
+```
+
+Targets are schema-allowlisted and executed directly as `make <target>` without a shell. Output is streamed and only a bounded tail is retained. Existing configs without `validation_profiles` remain valid.
 
 ## Doctor
 
@@ -143,7 +173,7 @@ Use `npm run mcp` when you want to run the local server yourself and expose port
 npm run mcp
 ```
 
-`npm run mcp` starts only the local MCP server on localhost. It does not start a tunnel and does not generate a public path token by itself.
+`npm run mcp` starts only the local MCP server on `127.0.0.1`. It does not start a tunnel and does not generate a public path token by itself.
 
 For a manual public tunnel, start the MCP server with an explicit random public path value. See [CONNECTION_OPTIONS.md](CONNECTION_OPTIONS.md) for the advanced environment-variable form.
 
@@ -204,6 +234,8 @@ Enable them per repo in `config.local.json`:
         "enabled": true,
         "git_stage_enabled": true,
         "git_commit_enabled": true,
+        "validation_enabled": true,
+        "validation_test_path_globs": ["tests/**", "**/*.test.ts", "**/*.spec.ts"],
         "cleanup_enabled": true
       }
     }
@@ -211,7 +243,22 @@ Enable them per repo in `config.local.json`:
 }
 ```
 
-Write, git, and cleanup actions are still policy-limited. ChatGPT will ask for confirmation for mutating tool calls unless you choose to remember approval for the conversation.
+Write, validation, git, and cleanup actions are still policy-limited. The ChatGPT host approval UI is the normal confirmation point for mutating tool calls unless you choose to remember approval for the conversation.
+
+Codebase Memory is an optional local add-on rather than a package dependency. To enable graph enrichment, add a global block with the absolute path to an already installed `codebase-memory-mcp` binary:
+
+```json
+{
+  "code_intelligence": {
+    "provider": "codebase_memory",
+    "executable": "/absolute/path/to/codebase-memory-mcp",
+    "query_timeout_ms": 3000,
+    "index_timeout_ms": 1800000
+  }
+}
+```
+
+If an approved repository has no matching index, `repo_symbol_context` returns native evidence with `provider.status: "index_required"`. ChatGPT asks before calling `repo_code_index` with `action: "start"`; index status is then monitored with `action: "status"`.
 
 If a read, write, or cleanup path is unexpectedly blocked, ask ChatGPT to run `repo_policy_explain` with the repo id and path. It explains read/write/cleanup policy decisions and local git operation toggles without reading or mutating files.
 

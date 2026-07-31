@@ -10,11 +10,10 @@ describe("IgnoreEngine", () => {
     expect(engine.isIgnored("src/index.ts")).toBe(false);
   });
 
-  test("applies local agent and recorder excludes", () => {
+  test("applies local tool metadata excludes", () => {
     const engine = new IgnoreEngine();
 
-    expect(engine.isIgnored(".agent-recorder/session.jsonl")).toBe(true);
-    expect(engine.isIgnored(".agentbus/recorder/events.jsonl")).toBe(true);
+    expect(engine.isIgnored(".agent-cache/session.json")).toBe(true);
     expect(engine.isIgnored(".codex/cache/state.json")).toBe(true);
   });
 
@@ -24,6 +23,26 @@ describe("IgnoreEngine", () => {
     expect(engine.isSensitiveCandidate(".env")).toBe(true);
     expect(engine.isSensitiveCandidate("config/prod.key")).toBe(true);
     expect(engine.isSensitiveCandidate("src/app.ts")).toBe(false);
+  });
+
+  test("always blocks private worker control artifacts and replies", () => {
+    const engine = new IgnoreEngine();
+    const run = ".chatgpt/codex-runs/2026-07-13T170000Z-private";
+
+    expect(engine.isSensitiveCandidate(`${run}/runner.session.json`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/runner.attempt.json`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/runner.lock.json`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/runner.lock.json.replace`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/runner.session.json.tmp-123-456-abcdef`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/interactions/turn-0001.reply.json`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run.toUpperCase()}/RUNNER.SESSION.JSON`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/InTeRaCtIoNs/TuRn-0001.RePlY.JsOn`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run.replaceAll("/", "\\")}\\RuNnEr.AtTeMpT.JsOn`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/RUNNER.LOCK.JSON.TMP-123-456-AbCdEf`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/RuNnEr.LoCk.JsOn`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/RUNNER.LOCK.JSON.REPLACE`)).toBe(true);
+    expect(engine.isSensitiveCandidate(`${run}/interactions/turn-0001.question.json`)).toBe(false);
+    expect(engine.isSensitiveCandidate(`${run}/runner.status.json`)).toBe(false);
   });
 
   test("allows ordinary code docs and tests that mention secret or credential", () => {

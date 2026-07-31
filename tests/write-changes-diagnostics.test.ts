@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { WriteChangesService } from "../src/services/write-changes-service.js";
 import { PathSandbox } from "../src/services/path-sandbox.js";
@@ -5,7 +7,7 @@ import { WritePolicy, type WritePolicyConfig } from "../src/services/write-polic
 import { createRepoFixture } from "./fixtures/repo-fixture.js";
 
 describe("WriteChangesService diagnostics", () => {
-  test("partial apply diagnostics do not mask unsafe failed path errors", async () => {
+  test("unsafe paths fail prevalidation before earlier changes are applied", async () => {
     const fixture = await createRepoFixture();
     const service = createService(fixture.root, { enabled: true, allowed_globs: ["docs/**"] });
     const unsafePath = ["..", "outside.md"].join("/");
@@ -17,11 +19,9 @@ describe("WriteChangesService diagnostics", () => {
       ]
     })).rejects.toMatchObject({
       code: "PATH_TRAVERSAL_REJECTED",
-      diagnostics: {
-        applied_paths: ["docs/applied-a.md"],
-        recovery_hint: expect.stringContaining("repo_git_review")
-      }
+      diagnostics: {}
     });
+    await expect(access(join(fixture.root, "docs", "applied-a.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

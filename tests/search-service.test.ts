@@ -6,7 +6,7 @@ import { createRepoFixture } from "./fixtures/repo-fixture.js";
 describe("SearchService", () => {
   test("finds literal matches with context", async () => {
     const fixture = await createRepoFixture();
-    const result = await new SearchService(fixture.root, new PathSandbox(fixture.root)).search({
+    const result = await new SearchService(new PathSandbox(fixture.root)).search({
       query: "/api/users",
       context_lines: 1
     });
@@ -23,7 +23,7 @@ describe("SearchService", () => {
 
   test("skips secret candidates, default excludes, binary files, and nested repo contents", async () => {
     const fixture = await createRepoFixture();
-    const service = new SearchService(fixture.root, new PathSandbox(fixture.root));
+    const service = new SearchService(new PathSandbox(fixture.root));
 
     expect((await service.search({ query: "super-secret" })).returned_count).toBe(0);
     expect((await service.search({ query: "ignored" })).returned_count).toBe(0);
@@ -32,7 +32,7 @@ describe("SearchService", () => {
 
   test("supports regex mode", async () => {
     const fixture = await createRepoFixture();
-    const result = await new SearchService(fixture.root, new PathSandbox(fixture.root)).search({
+    const result = await new SearchService(new PathSandbox(fixture.root)).search({
       query: "fetch\\('/api/users'\\)",
       mode: "regex"
     });
@@ -43,7 +43,7 @@ describe("SearchService", () => {
 
   test("supports include and exclude globs", async () => {
     const fixture = await createRepoFixture();
-    const result = await new SearchService(fixture.root, new PathSandbox(fixture.root)).search({
+    const result = await new SearchService(new PathSandbox(fixture.root)).search({
       query: "true",
       include_globs: ["src/**/*.controller.ts"],
       exclude_globs: ["src/admin.*"]
@@ -56,7 +56,7 @@ describe("SearchService", () => {
 
   test("paginates deterministic results with cursor", async () => {
     const fixture = await createRepoFixture();
-    const service = new SearchService(fixture.root, new PathSandbox(fixture.root));
+    const service = new SearchService(new PathSandbox(fixture.root));
 
     const first = await service.search({
       query: "export",
@@ -82,7 +82,7 @@ describe("SearchService", () => {
 
   test("rejects invalid regex with a stable policy error", async () => {
     const fixture = await createRepoFixture();
-    const service = new SearchService(fixture.root, new PathSandbox(fixture.root));
+    const service = new SearchService(new PathSandbox(fixture.root));
 
     await expect(service.search({ query: "(", mode: "regex" })).rejects.toMatchObject({
       code: "VALIDATION_ERROR"

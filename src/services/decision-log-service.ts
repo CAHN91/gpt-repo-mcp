@@ -19,7 +19,7 @@ type SourceHit = {
 export class DecisionLogService {
   private readonly ignoreEngine = new IgnoreEngine();
 
-  constructor(private readonly root: string, private readonly sandbox: PathSandbox) {}
+  constructor(private readonly sandbox: PathSandbox) {}
 
   async decisionLog(options: DecisionLogOptions = {}) {
     const includeSources = new Set(options.include_sources ?? DEFAULT_SOURCES);
@@ -53,7 +53,7 @@ export class DecisionLogService {
   }
 
   private async collectSources(includeSources: Set<DecisionSource>, warnings: string[]): Promise<SourceHit[]> {
-    const tree = await new RepoTreeService(this.root, this.sandbox).tree({
+    const tree = await new RepoTreeService(this.sandbox).tree({
       include_files: true,
       max_depth: 4,
       page_size: DEFAULT_LIMITS.max_tree_entries,

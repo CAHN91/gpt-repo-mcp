@@ -26,9 +26,9 @@ npm run add -- /path/to/repo --mode ship
 
 - `read` keeps writes and operations disabled.
 - `write` enables broad repo-local writes guarded by hard denied paths, secret checks, path sandboxing, resulting-content secret scans, and size limits.
-- `ship` uses write mode and also enables local git stage, commit, recover, and cleanup operations.
+- `ship` uses write mode and also enables local validation, git stage, commit, recover, and cleanup operations.
 
-`write` and `ship` use the same write policy. For clone-based solo-dev setup, that policy allows repo-local paths broadly with `allowed_globs: ["**"]` while the hard deny list still blocks `.env*`, private keys, Git internals, root and nested dependency directories, common generated/cache directories, coverage, test results, and virtual environments. The difference is that `ship` also enables the local operation policy for stage, commit, recover, and cleanup.
+`write` and `ship` use the same write policy. For clone-based solo-dev setup, that policy allows repo-local paths broadly with `allowed_globs: ["**"]` while the hard deny list still blocks `.env*`, private keys, Git internals, root and nested dependency directories, common generated/cache directories, coverage, test results, and virtual environments. The difference is that `ship` also enables the local operation policy for validation, stage, commit, recover, and cleanup.
 
 No mode adds shell execution or push, pull, reset, checkout, switch, rebase, merge, stash, clean, force, or branch deletion tools.
 
@@ -144,47 +144,77 @@ Use `dry_run: true` when you want to preview policy, path, size, and resulting c
 }
 ```
 
-For normal approved writes, call `repo_write_file` directly and review the resulting worktree with `repo_git_review` afterwards.
+For normal delegated writes, call `repo_write_file` directly and review the resulting worktree with `repo_git_review` afterwards.
 
-For approved multi-file edit packs, call `repo_write_changes` directly and review the resulting worktree with `repo_git_review` afterwards. `dry_run` is useful when you want a preview, but it is not required.
+For delegated multi-file edit packs, call `repo_write_changes` directly and review the resulting worktree with `repo_git_review` afterwards. `dry_run` is useful when you want a preview, but it is not required.
 
 After `repo_git_review`, prefer its composite payloads. Use `repo_write_stage_commit` for reviewed good changes and `repo_write_recover` for reviewed recovery, cleanup, unstage, or restore. Review-generated payloads intentionally omit optional `reason` fields to keep host/client approval payloads small and stable. ChatGPT or the user may add a short `reason` manually when it adds audit value.
 
-Low-level tools remain available for granular control, absent composite payloads, staged-only commits through `repo_write_commit`, specific user-requested operations, or troubleshooting after a composite failure. If a client blocks `repo_write_stage_commit`, use the review-provided `repo_write_stage` payload, then `repo_write_commit`; use the compatibility alias `repo_git_commit` only if needed.
+Low-level tools remain available for granular control, absent composite payloads, staged-only commits through `repo_write_commit`, specific user-requested operations, or troubleshooting after a composite failure. If a client blocks `repo_write_stage_commit`, use the review-provided `repo_write_stage` payload, then `repo_write_commit`.
 
-## Codex Task Workflow
+## Multi-run Delegation integration
 
-Direct implementation is the default when the user asks ChatGPT to fix, implement, update, or edit code. Use Codex task tools only when the user explicitly asks for a Codex prompt, Codex task, delegation to Codex, or a repo-local Codex run.
+Ordinary isolated runs keep the normal review-to-commit path. When several intentionally related v3 runs share one dirty worktree, do not repeatedly force whole-worktree attestations or manually stage many files.
 
-For repo-local Codex delegation, call `repo_write_codex_task` by default. Use it whenever Codex will receive an instruction like `Implement .chatgpt/codex-runs/<run_id>/PROMPT.md`; it writes the prompt file before Codex runs.
+After each run has current technical review and the required owner product verdict, run full validation and call `repo_write_integration_review` with the selected run ids, exact HEAD, validation id, and commit message. The result contains an opaque `review_pathset_id`; pass that payload unchanged to `repo_write_stage_commit`. The server owns the exact path list and rechecks HEAD, bytes, validation, semantic review, product verdicts, gates, path policy, and the final staged set.
 
-For chat-copy mode, call `repo_prepare_codex_task` only when the user wants to review or copy the prompt in chat. It returns a complete Codex prompt in `prompt_markdown` and does not write files:
+This path cannot rescue a failed run, ignore an extra path, expand authorization, change the reviewed commit message, run shell commands, or push.
+
+## Delegation v3 Workflow
+
+Direct implementation is the default when the user asks ChatGPT to fix, implement, update, or edit code. Use delegation tools only when the user explicitly asks for a Codex prompt, repo-local task, or implementation-agent run.
+
+Use `repo_prepare_codex_task` for preview-only validation. Use `repo_write_codex_task` for durable repo-local delegation. Every new task uses the strict Delegation v3 contract:
 
 ```json
 {
   "repo_id": "example-repo",
-  "title": "Fix login expiry",
-  "objective": "Read src/auth.ts and fix expired login handling.",
-  "inspect_first": ["src/auth.ts", "tests/auth.test.ts"],
-  "allowed_paths": ["src/auth.ts", "tests/auth.test.ts"],
-  "verification_commands": ["npm test -- tests/auth.test.ts"]
+  "title": "Restore login expiry handling",
+  "task_kind": "technical_infrastructure",
+  "assignment": "Restore complete and testable expired-session handling.",
+  "outcome": {
+    "beneficiary": "Application operator",
+    "current_problem": "Expired sessions fail without a reliable recovery path.",
+    "desired_outcome": "Expired sessions are handled consistently and can be verified without manual intervention.",
+    "why_now": "The current failure interrupts normal application use."
+  },
+  "technical_context": {
+    "enabling_value": "Provide one reliable session-expiry contract for the application."
+  },
+  "starting_points": ["src/auth.ts", "tests/auth.test.ts"],
+  "authorization_scope": ["src/**", "tests/**"],
+  "hard_constraints": ["Preserve existing authentication boundaries."],
+  "must_preserve": ["Non-expired login behavior remains unchanged."],
+  "explicit_exclusions": ["Do not add external network calls."],
+  "technical_acceptance_criteria": ["Expired-session behavior is covered by focused tests."],
+  "validation": { "profile": "test", "test_paths": ["tests/auth.test.ts"] },
+  "runner": { "mode": "manual" }
 }
 ```
 
-For repo-local mode, `repo_write_codex_task` writes:
+Product tasks additionally select repository-owned user/job IDs and define separate product acceptance criteria. Starting points are advisory; `authorization_scope` is permission, not an exhaustive implementation prediction.
+
+An actual `repo_write_codex_task` writes:
 
 - `.chatgpt/codex-runs/<run_id>/PROMPT.md`
 - `.chatgpt/codex-runs/<run_id>/run.json`
+- `.chatgpt/codex-runs/<run_id>/review-gate.json`
 
-Give Codex the returned `codex_user_prompt`, for example:
+The implementation agent must write strict `.chatgpt/codex-runs/<run_id>/RESULT.json` with connected-change evidence and separate PAC/TAC evidence. V3 does not use `RESULT.md` as result evidence.
+
+Use `repo_agent_runs` for bounded lifecycle state and structured questions. After completion, follow the exact chain:
 
 ```text
-Implement .chatgpt/codex-runs/<run_id>/PROMPT.md
+repo_codex_review
+repo_write_codex_review
+repo_ship_review
+repo_write_stage_commit if ready
+repo_write_recover if not ready
 ```
 
-The generated prompt tells Codex to write `.chatgpt/codex-runs/<run_id>/RESULT.md` before its final chat response. After Codex finishes, call `repo_codex_review` with the same `run_id`; it reads `RESULT.md`, runs git review logic, and returns review/recovery/commit next-tool payloads. If `RESULT.md` is missing, ask the user to paste Codex output or rerun Codex with the prompt completion contract.
+`repo_codex_review` validates integrity, baseline, authorization, changed files, connected work, TAC evidence, PAC evidence, and technical readiness. `repo_write_codex_review` records the state-bound qualitative product verdict or technical-only not-applicable verdict. Only a current valid attestation can open the shared ship gate. Historical v1/v2 artifacts remain reviewable through isolated legacy paths, but cannot be newly created.
 
-Codex task files are local ChatGPT working state under `.chatgpt/` and normally should not be committed.
+Delegation task files are local ChatGPT working state under `.chatgpt/` and normally should not be committed.
 
 ## ChatGPT Handoff Workflow
 
@@ -315,15 +345,16 @@ Recommended sequence:
 
 1. Use read tools to inspect existing files when needed.
 2. Call `repo_write_changes` with the complete edit pack.
-3. Call `repo_git_review` to inspect changed paths, diff summary, warnings, HEAD, and ready-to-run next tool payloads.
-4. If the diff is wrong, use the review-provided `repo_write_recover` payload after approval.
+3. Call `repo_git_review` to inspect changed paths, diff summary, validation readiness, warnings, HEAD, and ready-to-run next tool payloads. Pass `paths[]` only when the review and generated payloads should be scoped to exact current-task paths.
+4. If the diff is wrong, use the review-provided `repo_write_recover` payload through the host approval UI.
 5. Low-level `repo_git_restore_paths`, `repo_cleanup_paths`, and `repo_write_unstage` remain available when granular control is needed.
-6. If the diff is good, use the review-provided actual `repo_write_stage_commit` payload after approval. Use dry-run only when preview is requested or risk is unclear.
-7. If the client blocks the composite commit call, use review-provided granular fallback payloads: `repo_write_stage`, then `repo_write_commit`. Use `repo_git_commit` only as a compatibility fallback when needed.
+6. If validation is enabled and relevant package scripts exist, run `repo_validate` before shipping. For policy-allowlisted focused tests, pass `test_paths[]`; actual validation saves a redacted `.chatgpt/validation/**` artifact for later review.
+7. If the diff is good, use the review-provided actual `repo_write_stage_commit` payload through the host approval UI. Use dry-run only when preview is requested or risk is unclear.
+8. If the client blocks the composite commit call, use review-provided granular fallback payloads: `repo_write_stage`, then `repo_write_commit`.
 
-`repo_write_changes` does not stage, commit, restore, reset, checkout, or run shell commands. It applies changes sequentially and stops at the first error. Git review and explicit path restore are the safety layer for accepted writes.
+`repo_write_changes` does not stage, commit, reset, checkout, or run shell commands. It validates the complete pack before writing and restores earlier paths if a later filesystem operation fails. Git review remains the safety layer for accepted writes.
 
-If a later edit fails after earlier files were already applied, the error envelope may include safe diagnostics: `applied_paths`, `failed_path`, and `recovery_hint`. These values are repo-relative metadata only. They do not include file contents, raw diffs, snippets, secrets, stack traces, absolute paths, or command output.
+If rollback succeeds, the error envelope may include `rolled_back_paths` and `failed_path`. If rollback is incomplete, it additionally includes `applied_paths` and a canonical `repo_write_recover` hint. These values are repo-relative metadata only. They do not include file contents, raw diffs, snippets, secrets, stack traces, absolute paths, or command output.
 
 Successful actual `repo_write_file` and changed `repo_write_changes` calls save a local last-write receipt at `.chatgpt/operations/last-write.json`. The receipt is safe metadata only: tool name, repo id, timestamp, best-effort HEAD SHAs, touched/changed/created/modified repo-relative paths, counts, and summary. It does not store file contents, snippets, raw diffs, prompts, command output, secrets, or absolute paths. Receipt files are local runtime state and are ignored by Git.
 
@@ -362,7 +393,9 @@ repo_write_recover from review payload with unstage_paths and restore_paths
 
 Generated artifacts can be removed through review-provided `cleanup_paths`; cleanup still uses the same `cleanup_allowed_globs` policy as `repo_cleanup_paths`. Cleanup only removes explicit paths and refuses targets tracked by Git, so it is suitable for local ChatGPT artifacts such as untracked `.chatgpt/audits/**`, `.chatgpt/backlog/*.local.md`, or `.chatgpt/codex-runs/**` files but not for public tracked docs.
 
-`repo_write_recover` is explicit path-only. It requires `expected_head_sha`, validates operation policy, unstages only `unstage_paths`, restores only `restore_paths`, cleans only `cleanup_paths`, and returns best-effort `remaining_changes` and `clean_after`. It does not discover paths internally, reset, checkout, stash, run `git clean`, commit, push, or run shell commands.
+Safe untracked source, test, or documentation files can be discarded through review-provided `discard_paths` when an experiment should be abandoned instead of committed. Discard is explicit path-only and refuses tracked files, secret candidates, generated/cache/dependency paths, symlinks, and non-regular files.
+
+`repo_write_recover` is explicit path-only. It requires `expected_head_sha`, validates operation policy, unstages only `unstage_paths`, restores only `restore_paths`, cleans only `cleanup_paths`, discards only `discard_paths`, and returns best-effort `remaining_changes` and `clean_after`. It does not discover paths internally, reset, checkout, stash, run `git clean`, commit, push, or run shell commands.
 
 Example dry run:
 

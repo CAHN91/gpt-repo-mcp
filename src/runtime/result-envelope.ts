@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { SECRET_VALUE_PATTERN } from "../policies/secret-patterns.js";
+import { redactSecretValues } from "../policies/secret-patterns.js";
 import { RepoReaderError, toRepoReaderError } from "./errors.js";
 
 export type ToolContent = { type: "text"; text: string };
@@ -26,8 +26,7 @@ export type ErrorEnvelope = {
 };
 
 export function redactSensitiveText(value: string): string {
-  return value
-    .replace(SECRET_VALUE_PATTERN, "[REDACTED_SECRET]")
+  return redactSecretValues(value)
     .replace(/(?:\/Users|\/home|\/private|\/var|\/tmp)\/[^\s"'`]+/g, "[REDACTED_PATH]")
     .replace(/[A-Za-z]:\\[^\s"'`]+/g, "[REDACTED_PATH]");
 }
@@ -80,11 +79,14 @@ function sanitizeDiagnostics(diagnostics: Record<string, unknown>): Record<strin
   const safe: Record<string, unknown> = {};
 
   copyPathArrayDiagnostic(diagnostics, safe, "applied_paths");
+  copyPathArrayDiagnostic(diagnostics, safe, "rolled_back_paths");
   copyPathArrayDiagnostic(diagnostics, safe, "actual_paths");
   copyPathArrayDiagnostic(diagnostics, safe, "expected_paths");
   copyPathDiagnostic(diagnostics, safe, "failed_path");
   copyShaDiagnostic(diagnostics, safe, "head_sha");
   copyShaDiagnostic(diagnostics, safe, "expected_head_sha");
+  copyShaDiagnostic(diagnostics, safe, "current_sha256");
+  copyShaDiagnostic(diagnostics, safe, "expected_old_sha256");
   copySafeTextDiagnostic(diagnostics, safe, "recovery_hint");
 
   return Object.keys(safe).length > 0 ? safe : undefined;

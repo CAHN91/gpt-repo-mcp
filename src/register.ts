@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
-import { toolCatalog } from "./tools/catalog.js";
+import { toolRegistry } from "./tools/registry.js";
 import { registerCatalogTool } from "./tools/define-tool.js";
 import type { RuntimeContext } from "./runtime/context.js";
 
@@ -20,7 +20,7 @@ export function createMcpServer(context: RuntimeContext): McpServer {
     }
   );
 
-  for (const tool of toolCatalog) {
+  for (const tool of toolRegistry) {
     registerCatalogTool(server, context, tool);
   }
 
