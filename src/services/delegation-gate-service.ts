@@ -81,8 +81,16 @@ export class DelegationGateService {
     }
 
     const coveredPaths = new Set(runCandidates.flatMap(({ claimed_paths: paths }) => paths));
+    const enforceCoveredPaths = new Set(
+      runCandidates
+        .filter(({ manifest }) => manifest.delegation_audit.mode === "enforce")
+        .flatMap(({ claimed_paths: paths }) => paths)
+    );
     for (const candidate of runCandidates) {
-      const uncoveredPaths = candidate.governed_paths.filter((path) => !coveredPaths.has(path));
+      const eligibleCoveredPaths = candidate.manifest.delegation_audit.mode === "enforce"
+        ? enforceCoveredPaths
+        : coveredPaths;
+      const uncoveredPaths = candidate.governed_paths.filter((path) => !eligibleCoveredPaths.has(path));
       if (uncoveredPaths.length > 0) {
         applicableRuns.push(runDecision(
           {

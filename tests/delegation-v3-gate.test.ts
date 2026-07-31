@@ -142,6 +142,43 @@ describe("RNV-03C shared delegation gate", () => {
     })).rejects.toMatchObject({ code: "DELEGATION_REVIEW_GATE_BLOCKED" });
   });
 
+  test("an advisory claim cannot cover a path omitted by an enforce run", async () => {
+    const fixture = await gateFixture("advisory");
+    await writeTechnicalRun(fixture.root, RUN_A);
+    await writeFile(
+      join(fixture.root, "docs", "product-contract.json"),
+      `${JSON.stringify(productContract("enforce"), null, 2)}\n`
+    );
+    await writeTechnicalRun(fixture.root, RUN_B);
+    await writeFile(join(fixture.root, "src", "unreported.ts"), "export const mixedGovernance = true;\n");
+    await writeV3Result(fixture.root, RUN_A, { changed_files: ["src/unreported.ts"] });
+    await writeV3Result(fixture.root, RUN_B, { changed_files: [] });
+
+    const gate = new DelegationGateService(fixture.root);
+    const decision = await gate.evaluate({
+      repo_id: "fixture",
+      paths: ["src/unreported.ts"],
+      operation: "stage"
+    });
+
+    expect(decision.status).toBe("blocked");
+    expect(decision.applicable_runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        run_id: RUN_B,
+        governance_mode: "enforce",
+        applicable_paths: ["src/unreported.ts"],
+        status: "stale",
+        review_status: "stale"
+      })
+    ]));
+    expect(decision.blocking_reasons).toContain("DELEGATION_REVIEW_STATE_CHANGED");
+    await expect(gate.assertAllowed({
+      repo_id: "fixture",
+      paths: ["src/unreported.ts"],
+      operation: "stage"
+    })).rejects.toMatchObject({ code: "DELEGATION_REVIEW_GATE_BLOCKED" });
+  });
+
   test("product FAIL is durable and blocks every ship-capable gate path", async () => {
     const fixture = await gateFixture("enforce");
     const manifest = await writeProductRun(fixture.root, RUN_A);
