@@ -22,15 +22,11 @@ contract tests, server network-boundary tests, full test suite, build, and
 ## Current development-only advisories
 
 The projected OSS lockfile currently has no production advisories. Its full
-audit has five transitive findings confined to build, lint, and test tooling:
+audit has one transitive finding confined to build tooling:
 
 | Package | Toolchain path | Current decision |
 | --- | --- | --- |
-| `brace-expansion` | `typescript-eslint` and ESLint minimatch chains | Keep the current compatible lock selection; review upstream updates by 2026-08-31. |
 | `esbuild` | `tsup`, `tsx`, and Vite | Development process only; review coordinated toolchain updates by 2026-08-31. |
-| `js-yaml` | ESLint configuration loading | Development process only; review the next compatible ESLint release by 2026-08-31. |
-| `postcss` | `tsup` and Vite | No production runtime path; review coordinated toolchain updates by 2026-08-31. |
-| `vite` | Vitest | Test process only; review the next compatible Vitest/Vite release by 2026-08-31. |
 
 These are explicit temporary classifications, not blanket audit suppression.
 `security/oss-security-policy.json` locks the package names, severities, and
