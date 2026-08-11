@@ -1,5 +1,8 @@
 # Dependency Security
 
+This maintainer reference records current dependency decisions so contributors
+can distinguish production risk from development-tool advisories.
+
 Dependency advisories are handled from the checked-in lockfile. Do not use
 `npm audit fix --force`; it may replace the MCP SDK with an older incompatible
 version.
@@ -21,8 +24,8 @@ contract tests, server network-boundary tests, full test suite, build, and
 
 ## Current development-only advisories
 
-The projected OSS lockfile currently has no production advisories. Its full
-audit has one transitive finding confined to build tooling:
+The checked-in lockfile currently has no production advisories. Its full audit
+has one transitive finding confined to build tooling:
 
 | Package | Toolchain path | Current decision |
 | --- | --- | --- |
@@ -32,8 +35,8 @@ These are explicit temporary classifications, not blanket audit suppression.
 `security/oss-security-policy.json` locks the package names, severities, and
 review deadline. A new package, changed severity, production finding, or
 expired deadline fails the release security scan. Upgrade the owning direct
-development dependencies together, regenerate the projected lockfile, and run
-the full candidate verification; do not apply forced semver-major audit fixes.
+development dependencies together, regenerate the lockfile, and run the full
+verification suite; do not apply forced semver-major audit fixes.
 
 ## Verification
 

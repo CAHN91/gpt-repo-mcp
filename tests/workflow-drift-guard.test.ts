@@ -22,6 +22,31 @@ const ACTIVE_WORKFLOW_DOCS = [
   "docs/WRITE_WORKFLOWS.md"
 ] as const;
 
+const PUBLIC_DOCUMENTS = [
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "README.md",
+  "SECURITY.md",
+  "docs/APPROVAL_TROUBLESHOOTING.md",
+  "docs/ARCHITECTURE.md",
+  "docs/CAPABILITIES.md",
+  "docs/CHATGPT_CONNECT.md",
+  "docs/CONNECTION_OPTIONS.md",
+  "docs/DELEGATION_ARTIFACTS.md",
+  "docs/DEPENDENCY_SECURITY.md",
+  "docs/ERRORS.md",
+  "docs/GLOSSARY.md",
+  "docs/MIGRATION.md",
+  "docs/PRODUCT.md",
+  "docs/QUALITY.md",
+  "docs/RELEASE_CHECKLIST.md",
+  "docs/SECURITY.md",
+  "docs/SETUP.md",
+  "docs/TOOL_SURFACE.md",
+  "docs/WRITE_WORKFLOWS.md",
+  "docs/assets/README.md"
+] as const;
+
 const REMOVED_SOURCE_FILES = [
   "src/contracts/review.contract.ts",
   "src/services/review-planner.ts",
@@ -42,7 +67,7 @@ describe("canonical workflow drift guards", () => {
     }
   });
 
-  test("keeps active workflow documentation on canonical tools and Delegation v3", async () => {
+  test("keeps active workflow documentation on current public tools", async () => {
     for (const path of ACTIVE_WORKFLOW_DOCS) {
       const text = await readFile(path, "utf8");
       for (const removed of REMOVED_TOOLS) expect(text).not.toContain(removed);
@@ -53,10 +78,39 @@ describe("canonical workflow drift guards", () => {
     }
 
     const readme = await readFile("README.md", "utf8");
-    expect(readme).toContain("## Canonical Development Workflow");
-    expect(readme).toContain("repo_current_work_session");
-    expect(readme).toContain("repo_write_stage_commit");
-    expect(readme).toContain("repo_write_codex_review");
+    expect(readme).toContain("## How ChatGPT Works");
+    expect(readme).toContain("Understand");
+    expect(readme).toContain("Validate");
+    expect(readme).toContain("Review");
+
+    const capabilities = await readFile("docs/CAPABILITIES.md", "utf8");
+    expect(capabilities).toContain("## What GPT Repo MCP Does Not Do");
+
+    const security = await readFile("docs/SECURITY.md", "utf8");
+    expect(security).toContain("## Security Model At A Glance");
+    expect(security).toContain("## What Stays Local And What Is Sent To ChatGPT");
+
+    const toolSurface = await readFile("docs/TOOL_SURFACE.md", "utf8");
+    expect(toolSurface).toContain("## Tool Groups");
+    for (const { name } of toolCatalog) {
+      expect(toolSurface).toContain(`### \`${name}\``);
+    }
+
+    for (const doc of [readme, capabilities, security, toolSurface]) {
+      expect(doc).not.toMatch(/\b[A-Z]{3}-\d{2}[A-Z]?(?:-[A-Z0-9]+)?\b/u);
+      expect(doc).not.toContain("compatibility barrels");
+      expect(doc).not.toContain("Regression tests require");
+      expect(doc).not.toContain("This slice");
+    }
+  });
+
+  test("keeps published documentation free of private planning language", async () => {
+    for (const path of PUBLIC_DOCUMENTS) {
+      const text = await readFile(path, "utf8");
+      expect(text).not.toMatch(/\b[A-Z]{3}-\d{2}[A-Z]?(?:-[A-Z0-9]+)?\b/u);
+      expect(text).not.toMatch(/\b(?:post-audit|this slice|next slice|future slice|renovation phase|internal preparation|later profile work|obsolete router|physical removal)\b/iu);
+      expect(text).not.toMatch(/\b(?:source-only|sanitized public export|export candidate|release-generation report|projected OSS lockfile)\b/iu);
+    }
   });
 
   test("prevents planning and drift services from becoming competing authority engines", async () => {

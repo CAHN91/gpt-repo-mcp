@@ -13,7 +13,7 @@ All notable public changes to GPT Repo MCP are documented here.
 - Delegation v3 run inspection, structured replies, state-bound review
   attestations, and reviewed multi-run integration.
 - Secure Cloudflare connection support, stricter network boundaries, and
-  deterministic OSS release verification.
+  reproducible security and dependency verification.
 
 ### Changed
 
@@ -30,13 +30,10 @@ All notable public changes to GPT Repo MCP are documented here.
 - Duplicate aliases `repo_git_stage`, `repo_git_unstage`, and
   `repo_git_commit`.
 - The overlapping advisory routers `repo_next_action` and `repo_plan_review`.
-- Project-specific development utilities that are not part of the public MCP
-  server.
-
 ### Security
 
-- Added pinned secret scanning, reviewed dependency-license/advisory policy,
-  candidate checksum verification, and strict exclusion of local/internal
-  artifacts.
+- Added pinned secret scanning, dependency-license and advisory policy, and
+  stricter checks that keep local runtime state out of published source and
+  packages.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the 0.1.x upgrade steps.

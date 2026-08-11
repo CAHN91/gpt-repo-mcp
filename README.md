@@ -36,7 +36,7 @@ validation profiles, stale-state guards, and allowed Git operations.
 
 [Explore the capability guide](docs/CAPABILITIES.md) ·
 [Review the security model](docs/SECURITY.md) ·
-[Browse the complete tool reference](docs/TOOL_SURFACE.md)
+[See the tools and workflows](docs/TOOL_SURFACE.md)
 
 ## From Request To Reviewed Result
 
@@ -142,27 +142,27 @@ Prepare this completed change for a local commit, but do not push or deploy anyt
 More examples and resulting workflows are available in the
 [capability guide](docs/CAPABILITIES.md).
 
-## Canonical Development Workflow
+## How ChatGPT Works
 
-Direct ChatGPT implementation is the default:
+You describe the outcome in normal language. ChatGPT then chooses the smallest
+safe workflow that fits the request:
 
-1. Read `repo_project_brief` when project context is needed, or
-   `repo_current_work_session` when resuming previous work.
-2. Locate evidence with search and bounded reads.
-3. Implement with `repo_write_file` or `repo_write_changes`.
-4. Run an approved `repo_validate` profile.
-5. Review current repository state with `repo_ship_review` or
-   `repo_git_review`.
-6. Use the exact reviewed `repo_write_stage_commit` payload when ready, or
-   `repo_write_recover` when recovery is required.
+1. **Understand** — inspect the project structure and read relevant files.
+2. **Change** — edit one file or a coherent set of files when writes are enabled.
+3. **Validate** — run only checks that the repository has approved.
+4. **Review** — inspect the real Git diff, validation evidence, and remaining risk.
+5. **Finish or recover** — prepare a reviewed local commit, or safely reverse the
+   affected paths.
 
-Delegation is optional. When explicitly requested, GPT Repo MCP can prepare a
-repository-owned task, inspect its bounded result, and record a state-bound
-review with `repo_write_codex_review`. The public server records and reviews
-the handoff; it does not execute agents or manage external processes.
+Simple questions can stop after reading. Implementation requests can continue
+through the whole loop. Specialist tools for transactional patchsets, work
+continuity, or reviewing externally executed agent work are used only when the
+task benefits from them.
 
-See [Write workflows](docs/WRITE_WORKFLOWS.md) and
-[Delegation artifacts](docs/DELEGATION_ARTIFACTS.md) for the specialist paths.
+You normally do not need to select tools by name. The connector describes each
+tool to ChatGPT, and the server checks every request independently. See
+[Tools and workflows](docs/TOOL_SURFACE.md) when you want to understand the
+available tool groups or ask ChatGPT to use a specific capability.
 
 ## Safety By Design
 
@@ -193,19 +193,26 @@ For the full boundary, threat model, and approval behavior, read
 
 ## Documentation
 
-| Start here | When you need... |
+### Using GPT Repo MCP
+
+| Guide | When you need... |
 | --- | --- |
 | [Capability guide](docs/CAPABILITIES.md) | A user-oriented explanation of what ChatGPT can accomplish |
 | [Setup](docs/SETUP.md) | Installation and local configuration |
 | [ChatGPT connection](docs/CHATGPT_CONNECT.md) | Connector setup inside ChatGPT |
 | [Connection options](docs/CONNECTION_OPTIONS.md) | ngrok, Cloudflare, secure tunnel, and manual alternatives |
 | [Write workflows](docs/WRITE_WORKFLOWS.md) | Editing, validation, review, recovery, and local commits |
-| [Tool surface](docs/TOOL_SURFACE.md) | Exact schemas, outputs, and all 46 tools |
-| [Security](docs/SECURITY.md) | Permissions, sandboxing, approvals, and operational boundaries |
-| [Architecture](docs/ARCHITECTURE.md) | Internal structure and extension points |
+| [Tools and workflows](docs/TOOL_SURFACE.md) | What each tool group enables and when ChatGPT uses it |
+| [Security model](docs/SECURITY.md) | What is protected, what leaves your machine, and what remains your responsibility |
+| [Error reference](docs/ERRORS.md) | Stable error codes and what they mean |
+| [External-agent protocol](docs/DELEGATION_ARTIFACTS.md) | Advanced review workflow when you separately operate an implementation agent |
 | [Migration guide](docs/MIGRATION.md) | Moving from 0.1.x to 0.2.0 |
 
-Also see the [changelog](CHANGELOG.md), [terminology](docs/GLOSSARY.md), and
+### Contributing And Extending
+
+See [Product principles](docs/PRODUCT.md), [Architecture](docs/ARCHITECTURE.md),
+[Contributing](CONTRIBUTING.md), [Quality](docs/QUALITY.md), the
+[technical terminology](docs/GLOSSARY.md), and the
 [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Requirements

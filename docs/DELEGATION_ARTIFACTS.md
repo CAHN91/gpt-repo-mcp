@@ -1,5 +1,10 @@
 # Delegation Artifact Protocol
 
+This advanced reference is for users and integrators who separately operate an
+external implementation agent. Most repository work does not require this
+protocol; use the direct workflow described in the
+[Capability guide](CAPABILITIES.md) instead.
+
 GPT Repo MCP supports delegation through repository-owned files and explicit
 review tools. The protocol lets a manual or external implementation agent work
 against a bounded task while the MCP server retains authority over validation,
@@ -53,7 +58,7 @@ execution API: MCP tools never use them to launch, resume, configure, or cancel
 a worker.
 
 Delegation artifacts are local working state under `.chatgpt/` and should not
-be committed or included in an OSS source export.
+be committed or published.
 
 ## Visibility and privacy
 

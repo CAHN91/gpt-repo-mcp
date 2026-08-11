@@ -1,6 +1,9 @@
 # Quality Checklist
 
-This project is a closed-world MCP server for approved local repositories. Quality work should preserve the contract-first architecture, clear tool surface, and conservative safety model.
+This contributor and maintainer checklist describes the engineering standards
+expected for public changes. GPT Repo MCP is a closed-world MCP server for
+approved local repositories, so changes should preserve its contract-first
+architecture, clear tool surface, and conservative safety model.
 
 ## Architecture Invariants
 
@@ -72,9 +75,10 @@ npm test -- tests/file-writer.test.ts tests/git-operations-service.test.ts tests
 - Public hygiene checks must pass before release.
 - The built `dist/server.js` runtime smoke must pass before release.
 - MCP contract tests pass and snapshots match intentional tool surface changes.
-- No private local paths, personal workflow instructions, tokens, or internal development guidance are present in public docs.
-- Public documents do not link to internal roadmaps, dated specifications, or
-  source-only runtime documentation.
+- No machine-specific paths, personal workflow instructions, credentials, or
+  development planning notes are present in published documentation.
+- Documentation links resolve to files available in the public repository or
+  to an intentional external source.
 - `package.json` metadata is accurate and `package-lock.json` is unchanged unless dependencies changed intentionally.
 
 ## How To Add A Tool

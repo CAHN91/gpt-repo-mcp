@@ -16,8 +16,8 @@ Use this checklist when a mutating tool dry-run succeeds but the actual tool cal
   - `repo_write_stage_commit`
   - `repo_write_recover`
   - `repo_cleanup_paths`
-- Verify connector metadata was refreshed after changing tool schemas, descriptions, or server instructions.
-- Verify `src/instructions.ts` describes the app as read-mostly and does not call it read-only.
+- Refresh connector metadata after upgrading or rebuilding GPT Repo MCP.
+- Start a new ChatGPT conversation after refreshing the connector so the current tool descriptions are loaded.
 - Verify `config.local.json` enables the relevant write or operations policy for the target repo.
 - Verify the dry-run call succeeds before the actual mutation.
 - Verify the same operation works through MCP Inspector, API Playground, or a raw MCP client if available.

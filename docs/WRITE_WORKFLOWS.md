@@ -1,6 +1,12 @@
 # Write Workflows
 
-`repo_write_file` is the primary low-friction single-file writer/editor for approved repositories. Use it for Codex prompts, docs, notes, and precise one-file code edits.
+This is the detailed operational reference for users who want to understand or
+troubleshoot exact write behavior. In normal use, describe the desired outcome
+to ChatGPT and let it select the relevant tools.
+
+`repo_write_file` is the primary low-friction single-file writer or editor for
+approved repositories. Use it for source code, tests, configuration templates,
+documentation, and other policy-approved one-file changes.
 
 `repo_write_changes` is the low-friction multi-file writer and edit-pack applier. Use it when ChatGPT has a coherent set of file writes or exact-match edits and the next step should be a Git diff review.
 
@@ -144,9 +150,9 @@ Use `dry_run: true` when you want to preview policy, path, size, and resulting c
 }
 ```
 
-For normal delegated writes, call `repo_write_file` directly and review the resulting worktree with `repo_git_review` afterwards.
+For a normal single-file change, call `repo_write_file` directly and review the resulting worktree with `repo_git_review` afterwards.
 
-For delegated multi-file edit packs, call `repo_write_changes` directly and review the resulting worktree with `repo_git_review` afterwards. `dry_run` is useful when you want a preview, but it is not required.
+For a normal multi-file edit pack, call `repo_write_changes` directly and review the resulting worktree with `repo_git_review` afterwards. `dry_run` is useful when you want a preview, but it is not required.
 
 After `repo_git_review`, prefer its composite payloads. Use `repo_write_stage_commit` for reviewed good changes and `repo_write_recover` for reviewed recovery, cleanup, unstage, or restore. Review-generated payloads intentionally omit optional `reason` fields to keep host/client approval payloads small and stable. ChatGPT or the user may add a short `reason` manually when it adds audit value.
 
@@ -200,7 +206,10 @@ An actual `repo_write_codex_task` writes:
 - `.chatgpt/codex-runs/<run_id>/run.json`
 - `.chatgpt/codex-runs/<run_id>/review-gate.json`
 
-The implementation agent must write strict `.chatgpt/codex-runs/<run_id>/RESULT.json` with connected-change evidence and separate PAC/TAC evidence. V3 does not use `RESULT.md` as result evidence.
+The implementation agent must write strict
+`.chatgpt/codex-runs/<run_id>/RESULT.json` with connected-change evidence and
+separate product and technical acceptance-criteria evidence. V3 does not use
+`RESULT.md` as result evidence.
 
 Use `repo_agent_runs` for bounded lifecycle state and structured questions. After completion, follow the exact chain:
 
@@ -212,7 +221,12 @@ repo_write_stage_commit if ready
 repo_write_recover if not ready
 ```
 
-`repo_codex_review` validates integrity, baseline, authorization, changed files, connected work, TAC evidence, PAC evidence, and technical readiness. `repo_write_codex_review` records the state-bound qualitative product verdict or technical-only not-applicable verdict. Only a current valid attestation can open the shared ship gate. Historical v1/v2 artifacts remain reviewable through isolated legacy paths, but cannot be newly created.
+`repo_codex_review` validates integrity, baseline, authorization, changed
+files, connected work, product evidence, technical evidence, and technical
+readiness. `repo_write_codex_review` records the state-bound qualitative product
+verdict or technical-only not-applicable verdict. Only a current valid
+attestation can open the shared ship gate. Historical v1/v2 artifacts remain
+reviewable through isolated compatibility paths, but cannot be newly created.
 
 Delegation task files are local ChatGPT working state under `.chatgpt/` and normally should not be committed.
 
@@ -240,20 +254,20 @@ Minimal payload:
 ```json
 {
   "repo_id": "example-repo",
-  "title": "Write Tools v2 handoff",
-  "current_state": "Slice v2.3 is updating instructions and docs so ChatGPT routes private handoff requests to repo_write_handoff.",
-  "why": "The next session needs compact local resume context without turning private session notes into public documentation.",
-  "completed_work": ["Added repo_write_handoff as the preferred handoff workflow"],
-  "workflow": ["Run repo_git_status before handoff", "Run repo_git_review when dirty state matters"],
+  "title": "CSV export implementation handoff",
+  "current_state": "The export service and API route are complete; the UI and end-to-end test remain.",
+  "why": "The next conversation needs the current implementation state, decisions, and remaining acceptance criteria.",
+  "completed_work": ["Added the export service", "Added the authenticated API route"],
+  "workflow": ["Review current Git state before editing", "Run the focused export tests after the UI change"],
   "constraints": ["Handoffs are local-only", "Do not commit *.local.md handoff files"],
   "next_steps": [
     {
-      "title": "Slice v2.4 - Runtime smoke repo_write_handoff",
-      "goal": "Verify the handoff workflow through a live MCP call",
-      "done_when": "Runtime smoke proves current.local.md and the detailed .local.md handoff are created safely"
+      "title": "Complete the export UI",
+      "goal": "Add the download action and user-facing error state",
+      "done_when": "The UI and end-to-end export test pass"
     }
   ],
-  "important_files": ["src/instructions.ts", "docs/WRITE_WORKFLOWS.md", "docs/TOOL_SURFACE.md"]
+  "important_files": ["src/export-service.ts", "src/routes/export.ts", "tests/export.test.ts"]
 }
 ```
 
@@ -348,7 +362,7 @@ Recommended sequence:
 3. Call `repo_git_review` to inspect changed paths, diff summary, validation readiness, warnings, HEAD, and ready-to-run next tool payloads. Pass `paths[]` only when the review and generated payloads should be scoped to exact current-task paths.
 4. If the diff is wrong, use the review-provided `repo_write_recover` payload through the host approval UI.
 5. Low-level `repo_git_restore_paths`, `repo_cleanup_paths`, and `repo_write_unstage` remain available when granular control is needed.
-6. If validation is enabled and relevant package scripts exist, run `repo_validate` before shipping. For policy-allowlisted focused tests, pass `test_paths[]`; actual validation saves a redacted `.chatgpt/validation/**` artifact for later review.
+6. If validation is enabled and relevant package scripts exist, run `repo_validate` before preparing the local commit. For policy-allowlisted focused tests, pass `test_paths[]`; actual validation saves a redacted `.chatgpt/validation/**` artifact for later review.
 7. If the diff is good, use the review-provided actual `repo_write_stage_commit` payload through the host approval UI. Use dry-run only when preview is requested or risk is unclear.
 8. If the client blocks the composite commit call, use review-provided granular fallback payloads: `repo_write_stage`, then `repo_write_commit`.
 
@@ -414,7 +428,7 @@ Example dry run:
 
 It restores worktree changes only. If changes are already staged, use the `repo_write_unstage` payload from `repo_git_review` first, review again, and then restore the now-unstaged worktree paths. It does not run `reset --hard`, `checkout`, `switch`, `clean`, `stash`, `restore --staged`, or `restore --source`.
 
-## Runtime Smoke Checklist
+## Verify A Writable Setup
 
 Use this checklist after enabling writes in local config and refreshing the MCP client tool list:
 
@@ -434,10 +448,13 @@ The smoke test should only touch files under `.chatgpt/tool-tests/` and should n
 
 ## Non-Goals
 
-The write tools do not provide:
+GPT Repo MCP does not provide:
 
-- shell execution
-- git add, commit, push, reset, or checkout
-- direct Codex execution
-- arbitrary writes outside the configured write policy
-- writes to absolute paths, traversal paths, symlink escapes, secret candidates, denied globs, device files, sockets, named pipes, binary edit targets, or secret-looking resulting content
+- arbitrary shell or command execution;
+- Git push, pull, merge, rebase, reset, checkout, switch, stash, history
+  rewriting, or force operations;
+- built-in execution of Codex or another implementation agent;
+- arbitrary writes outside the configured repository policy; or
+- writes to absolute paths, traversal paths, symlink escapes, secret
+  candidates, denied globs, device files, sockets, named pipes, binary edit
+  targets, or secret-looking resulting content.

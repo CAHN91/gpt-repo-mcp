@@ -1,6 +1,12 @@
 # Architecture
 
-GPT Repo MCP (`gpt-repo-mcp`) is a tool-only MCP server. There is no widget in v1. The server exposes a Streamable HTTP `/mcp` endpoint plus a local health route.
+This is a contributor reference for understanding and extending the server.
+Users looking for product behavior should start with the
+[Capability guide](CAPABILITIES.md) and [Security model](SECURITY.md).
+
+GPT Repo MCP (`gpt-repo-mcp`) is a tool-only MCP server. It does not add a
+custom interface inside ChatGPT. The server exposes a Streamable HTTP `/mcp`
+endpoint plus a local health route.
 
 ## Boundaries
 
@@ -31,7 +37,10 @@ contracts -> toolContracts -> package definitions -> registry -> define-tool -> 
 
 Contracts define schemas. `toolContracts` assigns exactly one input and output contract to each tool and supplies the derived `ToolName` type. Package modules assign title, annotation, package, tier, optional capability requirements, and handler exactly once. The central registry rejects duplicate or missing definitions and restores the canonical public order before registration. `define-tool` is the only layer that turns Zod objects into MCP SDK `inputSchema` and `outputSchema` shapes. Package handlers resolve approved repos and call services.
 
-The current runtime registers the complete 46-tool surface. The only addition after RNV-06C is the explicit specialist `repo_write_integration_review` authority boundary; package and tier metadata remain internal preparation for later profile work.
+The runtime registers the complete 46-tool surface. The registry keeps each
+definition unique, preserves a stable public order, and rejects missing or
+duplicate definitions. Package and tier metadata organize implementation code;
+they are not additional user-facing tools or permissions.
 
 ## Data Flow
 
@@ -113,9 +122,17 @@ The service is projected in two bounded places:
 - `repo_agent_runs` list mode returns the complete aggregate `drift_summary`;
 - `repo_project_brief.product_brief` returns only `delegation_checkpoint`.
 
-`DelegationV3TaskService` may add existing drift signal codes to the task's normal `delegation_audit` warnings. Historical signals never block task creation in RNV-05, choose priorities, alter authorization, replace work-session direction, or create next-tool payloads. A passed product review already provides checkpoint evidence, so no separate checkpoint file, write tool, database, or dashboard exists.
+`DelegationV3TaskService` may add drift signal codes to the task's normal
+`delegation_audit` warnings. These signals are advisory: they never block task
+creation, choose priorities, alter authorization, replace work-session
+direction, or create next-tool payloads. A passed product review already
+provides checkpoint evidence, so no separate checkpoint file, write tool,
+database, or dashboard is required.
 
-A dedicated workflow-drift regression suite locks the intentional 46-tool surface, physical removal of obsolete routers/aliases, canonical active documentation, and the authority separation between work sessions, explicit-goal planning, run evidence, explicit integration approval, and Git/ship review.
+A dedicated workflow-drift regression suite protects the intentional 46-tool
+surface, canonical documentation, and the authority separation between work
+sessions, explicit-goal planning, run evidence, integration approval, and
+Git/ship review.
 
 ## Adding a Tool
 
