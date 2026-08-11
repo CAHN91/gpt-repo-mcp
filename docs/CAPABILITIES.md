@@ -5,8 +5,10 @@ Instead of uploading a project into the conversation or giving ChatGPT a
 general-purpose shell, you approve a repository and choose whether it can be
 read, changed, or prepared for a local commit.
 
-This guide explains the experience in terms of outcomes. For exact tool names,
-inputs, outputs, and schemas, see [TOOL_SURFACE.md](TOOL_SURFACE.md).
+This guide explains the experience in terms of outcomes. You normally describe
+the result you want and let ChatGPT choose the tools. For the available tool
+groups and their individual responsibilities, see
+[TOOL_SURFACE.md](TOOL_SURFACE.md).
 
 ## What Changes When ChatGPT Is Connected
 
@@ -173,12 +175,12 @@ Create a local handoff for the next ChatGPT conversation with the current
 state, decisions, risks, and remaining work.
 ```
 
-## Coordinate Codex Or Claude
+## Review Work From External Agents
 
-When the user explicitly requests delegation, ChatGPT can prepare a structured
-task, inspect run artifacts, answer current structured questions, and review an
-agent's result against the authorized scope, repository state, and acceptance
-evidence.
+GPT Repo MCP does not include or run an implementation agent. If you separately
+operate Codex, Claude, or another agent, ChatGPT can prepare a bounded task file
+and later review the returned result against the authorized scope, current
+repository state, acceptance criteria, and real Git diff.
 
 Agent claims are treated as evidence, not proof. ChatGPT reviews the actual
 result and diff before the normal ship-readiness and local-commit gates apply.
@@ -190,8 +192,23 @@ Prepare a focused Codex task for this migration. After the implementation is
 complete, review its result against the real diff and acceptance criteria.
 ```
 
-Writing a task does not execute an implementation agent, stage changes, commit,
-push, or deploy. External process execution remains outside the public server.
+Writing a task does not start, resume, or control an implementation agent. It
+also does not stage, commit, push, or deploy. Starting the external agent and
+deciding what it may access remain your responsibility.
+
+## What GPT Repo MCP Does Not Do
+
+GPT Repo MCP deliberately does not provide:
+
+- an unrestricted terminal or arbitrary command execution;
+- automatic push, merge, deployment, or history rewriting;
+- access outside repositories you explicitly approve;
+- silent write access — writes and local Git operations remain opt-in;
+- a built-in agent runner or provider credentials; or
+- a custom interface inside ChatGPT.
+
+These limits keep the connection focused on repository work that can be
+validated, reviewed, and approved through explicit server policies.
 
 ## Permission Modes
 
@@ -207,7 +224,6 @@ force operations, branch deletion, or unrestricted filesystem access.
 ## Where To Go Next
 
 - Start with the [README quickstart](../README.md#quickstart).
-- Review the [product and UX contract](PRODUCT.md).
-- See [TOOL_SURFACE.md](TOOL_SURFACE.md) for exact tool contracts.
+- See [TOOL_SURFACE.md](TOOL_SURFACE.md) for tools and recommended workflows.
 - See [WRITE_WORKFLOWS.md](WRITE_WORKFLOWS.md) for write and recovery details.
 - See [SECURITY.md](SECURITY.md) for enforced boundaries.

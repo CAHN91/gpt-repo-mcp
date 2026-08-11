@@ -1,6 +1,10 @@
 # Error Codes
 
-This inventory documents the existing v1 error codes returned through the shared error envelope. It is not a new output contract.
+Use this reference when troubleshooting a tool call or integrating an MCP
+client with GPT Repo MCP.
+
+This inventory documents the stable error codes returned through the shared
+error envelope.
 
 All tool errors return:
 
@@ -38,7 +42,7 @@ All tool errors return:
 | `WRITE_DISABLED` | A write was requested for a repo that has not enabled `writes.enabled`. |
 | `WRITE_DENIED_GLOB` | A write target matched a configured denied glob or secret-sensitive path. |
 | `WRITE_NOT_ALLOWED_GLOB` | A write target did not match the repo's configured allowed write globs. |
-| `WRITE_EXPECTED_SHA_REQUIRED` | Legacy code for old pre-OSS write schema; current write tools do not require user-supplied expected SHA. |
+| `WRITE_EXPECTED_SHA_REQUIRED` | Compatibility code for older clients; current write tools do not require a user-supplied expected SHA. |
 | `WRITE_STALE_EXPECTED_SHA` | Supplied `expected_old_sha256` did not match the current file SHA-256. |
 | `WRITE_PARENT_MISSING` | The target parent directory does not exist and `create_dirs` was not enabled. |
 | `WRITE_TARGET_EXISTS` | Supplied `expected_missing` required a missing target, but the path already exists. |

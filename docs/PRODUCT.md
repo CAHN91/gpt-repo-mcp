@@ -1,102 +1,95 @@
-# Product and UX Contract
+# Product Principles
 
-This document is the stable decision contract for GPT Repo MCP's public tool
-experience. It defines who the product serves, the recommended paths, and the
-promises that future tool-surface changes must preserve. Detailed schemas,
-policies, and implementation notes remain in the linked technical documents.
+GPT Repo MCP is for developers who want ChatGPT to work with a real local
+repository while keeping repository access narrow, visible, and reversible.
+This page explains the product choices users should be able to rely on.
 
-## Primary user and outcome
+## Who It Is For
 
-The primary user is a solo developer or small-team technical owner who wants
-ChatGPT to inspect, change, validate, review, and locally commit work in an
-approved repository without continuous supervision.
+The primary user is a solo developer or small technical team that wants
+ChatGPT to understand, change, validate, review, and locally commit work in an
+approved repository.
 
-The product succeeds when the user can reach a reviewed local result quickly,
-understand what happened, recover safely, and retain control over every
-repository, commit, push, and deployment decision.
+Many users already work with Codex or another coding agent. GPT Repo MCP
+complements those tools by giving ChatGPT current repository context, controlled
+development capabilities, and a way to review and coordinate the same local
+work without repeatedly copying files or reconstructing context in the
+conversation.
 
-## Recommended paths
+## The Expected Experience
 
-### Direct repository work
+A normal task follows a simple path:
 
-1. Establish repository and product context with `repo_project_brief` and the
-   smallest relevant read tools.
-2. Make bounded changes with the direct write tools.
-3. Validate with `repo_validate`.
-4. Review actual Git state with compact `repo_git_review`.
-5. Use the exact composite `repo_write_stage_commit` or `repo_write_commit`
-   payload returned by review.
+1. ChatGPT inspects the approved repository and relevant files.
+2. It changes one file or a coherent set of files when writes are enabled.
+3. It runs only repository-approved validation.
+4. It reviews the actual Git state and remaining risks.
+5. It either prepares a reviewed local commit or recovers the affected paths.
 
-This is the default happy path. Patchsets and granular Git operations are not
-prerequisites for ordinary work.
+Simple questions can stop after reading. Specialist capabilities such as
+transactional patchsets, work sessions, code indexing, or external-agent review
+are available when the task benefits from them, but they are not required for
+ordinary work.
 
-### Explicit agent delegation
+## Product Promises
 
-Use Delegation v3 only when work is intentionally handed to an external
-implementation agent. Create a grounded v3 task, follow the run through
-`repo_agent_runs`, review its real result with `repo_codex_review`, and use
-`repo_write_integration_review` when several runs require one owner decision.
-The ordinary Git review and local commit gates still apply.
+Users should be able to rely on these guarantees:
 
-### Recovery
+- Only explicitly approved repositories are available.
+- Repository permissions are clear: `read`, `write`, or `ship`.
+- The server offers focused repository capabilities, never arbitrary shell
+  access or unrestricted filesystem access.
+- Writes and local Git operations are policy-checked and visible to the host
+  approval flow.
+- Current file bytes, Git state, and validation evidence take precedence over
+  assumptions or external-agent claims.
+- Failures return useful, sanitized guidance without exposing credentials,
+  absolute local paths, stack traces, or raw environment values.
+- The server may create a reviewed local commit when authorized. It never
+  pushes, merges, deploys, or rewrites Git history.
+- Recovery is explicit and path-scoped rather than based on broad reset or
+  cleanup commands.
 
-Start from `repo_last_write`, `repo_git_review`, or a failed write's sanitized
-diagnostics. Prefer the exact `repo_write_recover` payload returned by review.
-Use granular unstage, restore, or cleanup tools only when the composite recovery
-path cannot represent the intended action.
+## User Control
 
-## Product promises
+The user chooses:
 
-- The server exposes closed-world repository capabilities, never arbitrary
-  shell access.
-- Access is limited to explicitly approved local repositories and their
-  configured policies.
-- Mutating calls are visible to the host approval UI and protected by stale
-  HEAD, path, secret, and policy checks.
-- Successful writes return evidence and an executable next step when another
-  action is required.
-- Failures are sanitized, actionable, and do not expose source contents,
-  secrets, absolute paths, stack traces, environment values, or raw commands.
-- Compact responses are the default; detailed responses are an explicit
-  specialist choice.
-- The product may create local commits when authorized. It never pushes,
-  deploys, or broadens repository access automatically.
-- Current repository state and actual diffs take precedence over agent claims.
+- which local repositories are approved;
+- the permission mode for each repository;
+- the development outcome to pursue;
+- whether mutating calls are approved;
+- whether a completed change should be committed; and
+- whether anything is later pushed, merged, or deployed outside GPT Repo MCP.
 
-## Surface and compatibility
+ChatGPT chooses a suitable workflow for the request. The MCP server separately
+enforces repository, path, validation, write, secret, and Git policy on every
+call.
 
-The direct developer workflow is current and recommended. Patchsets,
-delegation, diagnostics, and granular operations are specialist surfaces.
-Delegation v3 is the current delegation contract. Historical v1/v2 artifacts
-remain readable for compatibility but cannot be created through the public
-surface.
+## External-Agent Work
 
-Public tool names, payload fields, persisted artifact paths, and error codes are
-compatibility contracts. Historical names such as `codex` and `ship` may remain
-in those contracts even when internal code and documentation use the clearer
-terms defined in [GLOSSARY.md](GLOSSARY.md).
+GPT Repo MCP can prepare bounded task artifacts and review results produced by
+an external implementation agent. It does not include, launch, authenticate,
+or control that agent.
 
-## Change and deprecation bar
+External-agent claims are treated as evidence rather than proof. The normal
+review, validation, and local-commit gates still apply to the real repository
+state.
 
-A public rename, removal, default change, or workflow replacement requires:
+## Compatibility
 
-1. a documented user problem or usage signal;
-2. a migration path and versioned deprecation;
-3. preserved safety and recovery guarantees;
-4. contract, integration, and distribution verification; and
-5. updated canonical documentation in the same change.
+Public tool names, documented payload fields, error codes, and persisted
+artifact formats are versioned compatibility contracts. Breaking changes
+should have a documented reason, migration path, and release note.
 
-Do not add aliases, routing meta-tools, visible approval ceremony, or parallel
-happy paths only to hide surface complexity. Simplify the recommended path
-first and keep specialist capability explicit.
+Some public names retain terms such as `codex` or `ship` for compatibility.
+Here, “ship” means readiness for a reviewed local result; it does not mean push
+or deployment. See [Terms and compatibility names](GLOSSARY.md).
 
-## Technical sources
+## Related Guides
 
-- Product data and governance: [product-contract.json](product-contract.json)
-- Tool schemas and workflow details: [TOOL_SURFACE.md](TOOL_SURFACE.md)
-- Security boundaries: [SECURITY.md](SECURITY.md)
-- Write and recovery procedures: [WRITE_WORKFLOWS.md](WRITE_WORKFLOWS.md)
-- Delegation artifact and review protocol:
-  [DELEGATION_ARTIFACTS.md](DELEGATION_ARTIFACTS.md)
-- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
-- Current and compatibility terminology: [GLOSSARY.md](GLOSSARY.md)
+- [Capability guide](CAPABILITIES.md)
+- [Tools and workflows](TOOL_SURFACE.md)
+- [Security model](SECURITY.md)
+- [Write workflows](WRITE_WORKFLOWS.md)
+- [Architecture](ARCHITECTURE.md)
+- [Delegation artifact protocol](DELEGATION_ARTIFACTS.md)

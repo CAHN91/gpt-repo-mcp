@@ -1,24 +1,22 @@
-# Current and Compatibility Terminology
+# Terms And Compatibility Names
 
-Use the current terms in new internal code and active documentation. Keep
-public tool names, payload fields, persisted paths, and stable error codes
-unchanged until a versioned deprecation explicitly replaces them.
+GPT Repo MCP uses a small vocabulary to distinguish ordinary repository work,
+local completion, and optional external-agent workflows.
 
-| Current term | Meaning | Compatibility terminology |
+| Term | Meaning | Related public name |
 | --- | --- | --- |
-| repository | One configured local root and its effective policies. Use `repo` only in identifiers already built around `repo_id`. | Public tools intentionally retain the `repo_` prefix. |
-| tool | One closed-world MCP capability with one canonical public name. | Do not call aliases or routing meta-tools separate workflows. |
-| direct workflow | The default inspect, write, validate, review, and local commit path. | Sometimes described as the `developer` package path. |
-| work session | Durable continuity state for one active repository goal. | A work session is not an agent run or a delegation. |
-| delegation | An explicit handoff to an external implementation agent. | Public tool names and persisted paths retain `codex` for compatibility. |
-| Delegation v3 | The current task, lineage, result, review, and integration contract. | v1/v2 runs are legacy, read-only compatibility artifacts. |
-| agent run | The queued or executing lifecycle of one delegated task. | Do not use `task` and `run` interchangeably: the task is the assignment; the run is its execution. |
-| review | Evidence-based assessment of current files, Git state, validation, or a delegated result. | `repo_codex_review` is the compatibility-stable name for delegation review. |
-| ship review | The local readiness gate that combines review evidence and returns an authorized next payload. | “Ship” does not mean push, release, or deploy. |
-| stage-and-commit | The normal composite local Git mutation after review. | `repo_write_stage_commit` remains the public tool name. |
-| granular Git operations | Specialist stage, unstage, restore, cleanup, and commit primitives. | Use only when the composite workflow cannot express the intended action. |
-| patchset | A separately reviewable prepare/apply/rollback file transaction. | It is a specialist alternative to direct writes, not the default write model. |
+| Repository | One configured local root with its own read, write, validation, and Git policies. | Tools use `repo_id` and the `repo_` prefix. |
+| Tool | One focused MCP capability with a documented input and result. | The complete list is in [Tools and workflows](TOOL_SURFACE.md). |
+| Direct workflow | The normal understand, edit, validate, review, and local-commit path. | This is the recommended path for ordinary development work. |
+| Work session | Optional local continuity state for one repository goal. | A work session is not an implementation-agent run. |
+| Delegation | An explicit handoff to an external implementation agent operated separately by the user. | Some compatibility-stable tool names retain `codex`. |
+| Agent run | One execution of a delegated task by an external worker. | The task is the assignment; the run is its execution. |
+| Review | An evidence-based assessment of current files, Git state, validation, or an external result. | `repo_codex_review` is the compatibility-stable name for delegated-result review. |
+| Ship review | The local readiness check that combines review evidence and can authorize a next step. | “Ship” does not mean push, release, or deployment. |
+| Stage and commit | The normal composite local Git action after a successful review. | Exposed as `repo_write_stage_commit`. |
+| Granular Git operations | Separate stage, unstage, restore, cleanup, and commit actions. | Used when the composite workflow cannot express the intended action. |
+| Patchset | A separately reviewable prepare, apply, and rollback file transaction. | A specialist alternative to direct writes. |
 
-When a current term and a compatibility name differ, prefer the current term in
-module names, local variables, comments, and prose. Use the compatibility name
-only where the public or persisted contract requires it.
+Compatibility names remain in place until a versioned release documents a
+migration. Users normally describe the desired outcome in natural language and
+do not need to choose tools by name.

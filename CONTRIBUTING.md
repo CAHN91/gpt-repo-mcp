@@ -24,7 +24,7 @@ Use targeted tests for the area you changed before broad validation.
 
 - Do not add shell execution or arbitrary command-runner tools.
 - Do not weaken sandbox, secret, path, write, git, or cleanup policies.
-- Keep tool changes contract-first: contracts -> toolContracts -> catalog -> define-tool -> handlers -> services.
-- Keep the tool catalog metadata-only and handlers thin.
+- Keep tool changes contract-first: contracts -> tool registry -> handlers -> services.
+- Keep tool definitions metadata-only and handlers thin.
 - Put real behavior in services and policy decisions in policy/service layers.
 - Mutating tools require explicit policy, safe defaults, and focused tests.

@@ -6,10 +6,8 @@ ChatGPT cannot call a local `localhost` MCP server directly. GPT Repo MCP suppor
 - manual local server plus your own HTTPS tunnel or reverse proxy
 - advanced OpenAI Secure MCP Tunnel when your workspace supports it
 
-The three bundled connector scripts share one child-process supervisor. Output
-is consistently prefixed, an unexpected MCP or tunnel exit terminates its
-sibling, and Ctrl+C/SIGTERM performs a bounded SIGTERM-to-SIGKILL shutdown
-before the connector exits.
+The bundled connector commands keep the MCP server and tunnel lifecycle
+together. Stopping the command shuts down both processes.
 
 ## ngrok prerequisites
 
