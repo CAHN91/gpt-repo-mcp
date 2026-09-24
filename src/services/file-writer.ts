@@ -191,7 +191,7 @@ export class FileWriter {
       const find = requireFind(input, action);
       const replace = requireReplace(input, action);
       assertFindAppearsExactlyOnce(oldText, find, target.repoPath);
-      nextText = oldText.replace(find, replace);
+      nextText = replaceExactLiteral(oldText, find, replace);
     } else if (action === "insert_before") {
       const find = requireFind(input, action);
       assertFindAppearsExactlyOnce(oldText, find, target.repoPath);
@@ -344,13 +344,18 @@ function assertFindAppearsExactlyOnce(text: string, find: string, repoPath: stri
   }
 }
 
+function replaceExactLiteral(text: string, find: string, replacement: string): string {
+  const index = text.indexOf(find);
+  return text.slice(0, index) + replacement + text.slice(index + find.length);
+}
+
 function applyGroupedEdits(text: string, edits: WriteGroupedEditChange["edits"], repoPath: string): string {
   let nextText = text;
   for (const edit of edits) {
     const find = requireGroupedFind(edit, repoPath);
     assertFindAppearsExactlyOnce(nextText, find, repoPath);
     if (edit.type === "replace") {
-      nextText = nextText.replace(find, requireGroupedReplace(edit));
+      nextText = replaceExactLiteral(nextText, find, requireGroupedReplace(edit));
     } else if (edit.type === "insert_before") {
       const index = nextText.indexOf(find);
       nextText = nextText.slice(0, index) + requireGroupedContent(edit) + nextText.slice(index);

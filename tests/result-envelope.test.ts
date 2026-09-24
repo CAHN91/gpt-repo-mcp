@@ -50,3 +50,26 @@ describe("result envelope", () => {
     expect(serialized).not.toContain("@@ secret");
   });
 });
+
+describe("result envelope diagnostic summary", () => {
+  test("surfaces safe failed path, change index, and OS cause in text fallback", () => {
+    const result = createErrorEnvelope(new RepoReaderError("INTERNAL_ERROR", "Atomic edit pack failed and was rolled back.", {
+      diagnostics: {
+        failed_path: "agents/_Workspace/TASK.md",
+        failed_change_index: 1,
+        cause_code: "EPERM",
+        raw_output: "secret detail"
+      }
+    }));
+
+    expect(result.structuredContent.error.diagnostics).toEqual({
+      failed_path: "agents/_Workspace/TASK.md",
+      failed_change_index: 1,
+      cause_code: "EPERM"
+    });
+    expect(result.content[0]?.text).toContain("failed_path=agents/_Workspace/TASK.md");
+    expect(result.content[0]?.text).toContain("failed_change_index=1");
+    expect(result.content[0]?.text).toContain("cause_code=EPERM");
+    expect(JSON.stringify(result)).not.toContain("secret detail");
+  });
+});

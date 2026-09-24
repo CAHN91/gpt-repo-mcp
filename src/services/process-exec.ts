@@ -26,6 +26,7 @@ export async function runProcessWithTail(input: {
       cwd: input.cwd,
       env: input.env,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
       detached: process.platform !== "win32"
     });
     let stdout = Buffer.alloc(0);

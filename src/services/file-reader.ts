@@ -15,6 +15,20 @@ export type FetchFileOptions = {
   override_default_excludes?: boolean;
 };
 
+function detectNewlineStyle(text: string): "lf" | "crlf" | "cr" | "mixed" | "none" {
+  const crlfCount = (text.match(/\r\n/g) ?? []).length;
+  const withoutCrlf = text.replace(/\r\n/g, "");
+  const lfCount = (withoutCrlf.match(/\n/g) ?? []).length;
+  const crCount = (withoutCrlf.match(/\r/g) ?? []).length;
+  const styles = [
+    crlfCount > 0 ? "crlf" : undefined,
+    lfCount > 0 ? "lf" : undefined,
+    crCount > 0 ? "cr" : undefined
+  ].filter((value): value is "lf" | "crlf" | "cr" => Boolean(value));
+  if (styles.length === 0) return "none";
+  return styles.length === 1 ? styles[0]! : "mixed";
+}
+
 export class FileReader {
   private readonly ignoreEngine = new IgnoreEngine();
   private readonly classifier = new FileClassifier(this.ignoreEngine);
@@ -57,7 +71,9 @@ export class FileReader {
       throw new RepoReaderError("SECRET_CANDIDATE_BLOCKED", `Secret candidate blocked: ${resolved.repoPath}`);
     }
     const text = this.secretScanner.redact(rawText);
-    const lines = text.split(/\r?\n/);
+    const newlineStyle = detectNewlineStyle(rawText);
+    const hasFinalNewline = /(?:\r\n|\n|\r)$/.test(rawText);
+    const lines = text.split(/\r\n|\n|\r/);
     const startLine = options.start_line ?? 1;
     const endLine = options.end_line ?? lines.length;
     const selected = lines.slice(startLine - 1, endLine).join("\n");
@@ -67,6 +83,8 @@ export class FileReader {
       language: classification.language,
       size_bytes: content.byteLength,
       sha256: createHash("sha256").update(content).digest("hex"),
+      newline_style: newlineStyle,
+      has_final_newline: hasFinalNewline,
       total_lines: lines.length,
       start_line: startLine,
       end_line: Math.min(endLine, lines.length),

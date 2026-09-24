@@ -480,7 +480,7 @@ export class PatchsetService {
         });
       }
       diagnostics.push({ path: file.path, hunk_index: index, status: "matched", occurrences });
-      currentText = currentText.replace(hunk.find, hunk.replace);
+      currentText = replaceExactLiteral(currentText, hunk.find, hunk.replace);
     }
     return diagnostics;
   }
@@ -665,6 +665,11 @@ export class PatchsetService {
 
     return { restored_paths, deleted_paths, skipped, before_sha256, after_sha256 };
   }
+}
+
+function replaceExactLiteral(text: string, find: string, replacement: string): string {
+  const index = text.indexOf(find);
+  return text.slice(0, index) + replacement + text.slice(index + find.length);
 }
 
 function countOccurrences(text: string, find: string): number {

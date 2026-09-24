@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
@@ -463,6 +464,39 @@ describe("PatchsetService", () => {
     await expect(access(join(fixture.root, "src", "app-renamed.ts"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  test("structured edit hunks preserve replacement metacharacters literally", async () => {
+    const fixture = await createPlainRepoFixture();
+    const head = await initGitRepo(fixture.root);
+    const service = createRollbackService(fixture.root);
+    const original = "export function rawFetch() {\n  return fetch('/api/users');\n}\n";
+    const prepared = await service.prepare({
+      repo_id: "fixture",
+      intent: "Literal replacement tokens",
+      base_head_sha: head,
+      files: [
+        {
+          path: "src/app.ts",
+          operation: "edit",
+          expected_old_sha256: sha256(original),
+          hunks: [
+            { find: "rawFetch", replace: "safe$'Fetch" },
+            { find: "/api/users", replace: "/api/$&/accounts" }
+          ]
+        }
+      ]
+    });
+
+    await service.apply({
+      repo_id: "fixture",
+      patchset_id: prepared.patchset_id,
+      expected_head_sha: head
+    });
+
+    await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toBe(
+      "export function safe$'Fetch() {\n  return fetch('/api/$&/accounts');\n}\n"
+    );
+  });
+
   test("apply and rollback structured edit hunks", async () => {
     const fixture = await createRepoFixture();
     const head = await initGitRepo(fixture.root);
@@ -657,6 +691,15 @@ describe("PatchsetService", () => {
   });
 });
 
+
+async function createPlainRepoFixture(): Promise<{ root: string }> {
+  const root = await mkdtemp(join(tmpdir(), "gpt-repo-patchset-literal-"));
+  await mkdir(join(root, "docs"), { recursive: true });
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "docs", "guide.md"), "# Guide\nSearchable docs\n");
+  await writeFile(join(root, "src", "app.ts"), "export function rawFetch() {\n  return fetch('/api/users');\n}\n");
+  return { root };
+}
 function createService(root: string): PatchsetService {
   return new PatchsetService(root, new PathSandbox(root), new WritePolicy({
     enabled: true,

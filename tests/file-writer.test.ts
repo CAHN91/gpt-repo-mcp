@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { FileWriter } from "../src/services/file-writer.js";
@@ -182,6 +183,32 @@ describe("FileWriter", () => {
     });
 
     await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\nUpdated docs\n");
+  });
+
+  test("replace preserves JavaScript replacement metacharacters literally", async () => {
+    const fixture = await createPlainRepoFixture();
+    const writer = createWriter(fixture.root, { enabled: true });
+    const replacement = "literal $' and $& value";
+
+    await writer.write({
+      path: "docs/guide.md",
+      action: "replace",
+      find: "Searchable docs",
+      replace: replacement
+    });
+
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("# Guide\n" + replacement + "\n");
+
+    await writeFile(join(fixture.root, "docs", "guide.md"), "first=old\nsecond=old\n");
+    await writer.writeGroupedEdit({
+      path: "docs/guide.md",
+      edits: [
+        { type: "replace", find: "first=old", replace: "first=$'" },
+        { type: "replace", find: "second=old", replace: "second=$&" }
+      ]
+    });
+
+    await expect(readFile(join(fixture.root, "docs", "guide.md"), "utf8")).resolves.toBe("first=$'\nsecond=$&\n");
   });
 
   test("replace requires find", async () => {
@@ -547,6 +574,13 @@ describe("FileWriter", () => {
   });
 });
 
+
+async function createPlainRepoFixture(): Promise<{ root: string }> {
+  const root = await mkdtemp(join(tmpdir(), "gpt-repo-literal-"));
+  await mkdir(join(root, "docs"), { recursive: true });
+  await writeFile(join(root, "docs", "guide.md"), "# Guide\nSearchable docs\n");
+  return { root };
+}
 function createWriter(root: string, policy: WritePolicyConfig) {
   return new FileWriter(root, new PathSandbox(root), new WritePolicy(policy));
 }

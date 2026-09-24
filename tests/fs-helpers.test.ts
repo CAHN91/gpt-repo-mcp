@@ -33,6 +33,7 @@ describe("fs helpers", () => {
     const filePath = join(root, "nested", "file.txt");
     const jsonPath = join(root, "nested", "lock.json");
 
+    await atomicWriteFile(filePath, Buffer.from("first"));
     await atomicWriteFile(filePath, Buffer.from("content"));
     await writeExclusiveJson(jsonPath, { owner: "first" });
 

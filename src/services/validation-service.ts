@@ -143,14 +143,17 @@ export class ValidationService {
     const runtime = selectedNode
       ? { name: selectedNode.name, version: selectedNode.version, source: selectedNode.source }
       : undefined;
-    const plans: CommandPlan[] = npmProfiles.map((candidate) => ({
-      profile: candidate,
-      script: candidate,
-      executable: "npm",
-      command: testPaths && candidate === "test" ? `npm run test -- ${testPaths.join(" ")}` : `npm run ${candidate}`,
-      args: testPaths && candidate === "test" ? ["run", candidate, "--", ...testPaths] : ["run", candidate],
-      ...(selectedNode ? { pathPrefix: selectedNode.bin_directory, runtime } : {})
-    }));
+    const plans: CommandPlan[] = npmProfiles.map((candidate) => {
+      const npmArgs = testPaths && candidate === "test" ? ["run", candidate, "--", ...testPaths] : ["run", candidate];
+      return {
+        profile: candidate,
+        script: candidate,
+        executable: process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "npm",
+        command: testPaths && candidate === "test" ? `npm run test -- ${testPaths.join(" ")}` : `npm run ${candidate}`,
+        args: process.platform === "win32" ? ["/d", "/s", "/c", "npm.cmd", ...npmArgs] : npmArgs,
+        ...(selectedNode ? { pathPrefix: selectedNode.bin_directory, runtime } : {})
+      };
+    });
     const needsPytest = !("test" in scripts) && (profile === "test" || profile === "all") && await this.hasPythonTestSuite();
     if (needsPytest) {
       const python = await this.selectPython();

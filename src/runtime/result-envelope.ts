@@ -58,6 +58,7 @@ export function createErrorEnvelope(error: RepoReaderError | Error | {
 
   const message = redactSensitiveText(normalized.message);
   const diagnostics = sanitizeDiagnostics(normalized.diagnostics);
+  const diagnosticSummary = formatDiagnosticSummary(diagnostics);
   return {
     isError: true,
     structuredContent: {
@@ -71,8 +72,17 @@ export function createErrorEnvelope(error: RepoReaderError | Error | {
           : {})
       }
     },
-    content: [{ type: "text", text: `${normalized.code}: ${message}` }]
+    content: [{ type: "text", text: `${normalized.code}: ${message}${diagnosticSummary}` }]
   } as ErrorEnvelope & CallToolResult;
+}
+
+function formatDiagnosticSummary(diagnostics: Record<string, unknown> | undefined): string {
+  if (!diagnostics) return "";
+  const parts: string[] = [];
+  if (typeof diagnostics.failed_path === "string") parts.push(`failed_path=${diagnostics.failed_path}`);
+  if (typeof diagnostics.failed_change_index === "number") parts.push(`failed_change_index=${diagnostics.failed_change_index}`);
+  if (typeof diagnostics.cause_code === "string") parts.push(`cause_code=${diagnostics.cause_code}`);
+  return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
 
 function sanitizeDiagnostics(diagnostics: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -83,6 +93,8 @@ function sanitizeDiagnostics(diagnostics: Record<string, unknown>): Record<strin
   copyPathArrayDiagnostic(diagnostics, safe, "actual_paths");
   copyPathArrayDiagnostic(diagnostics, safe, "expected_paths");
   copyPathDiagnostic(diagnostics, safe, "failed_path");
+  copyIntegerDiagnostic(diagnostics, safe, "failed_change_index", 0, 24);
+  copyErrorCodeDiagnostic(diagnostics, safe, "cause_code");
   copyShaDiagnostic(diagnostics, safe, "head_sha");
   copyShaDiagnostic(diagnostics, safe, "expected_head_sha");
   copyShaDiagnostic(diagnostics, safe, "current_sha256");
@@ -106,6 +118,20 @@ function copyPathArrayDiagnostic(source: Record<string, unknown>, target: Record
 function copyPathDiagnostic(source: Record<string, unknown>, target: Record<string, unknown>, key: string): void {
   const value = source[key];
   if (isSafeRepoPath(value)) {
+    target[key] = value;
+  }
+}
+
+function copyIntegerDiagnostic(source: Record<string, unknown>, target: Record<string, unknown>, key: string, min: number, max: number): void {
+  const value = source[key];
+  if (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max) {
+    target[key] = value;
+  }
+}
+
+function copyErrorCodeDiagnostic(source: Record<string, unknown>, target: Record<string, unknown>, key: string): void {
+  const value = source[key];
+  if (typeof value === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(value)) {
     target[key] = value;
   }
 }

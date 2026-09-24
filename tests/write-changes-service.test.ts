@@ -19,7 +19,7 @@ class FailAfterMarkerSandbox extends PathSandbox {
     if (repoPath === this.failedPath) {
       try {
         await access(this.markerPath);
-        throw new Error("Injected filesystem failure");
+        throw Object.assign(new Error("Injected filesystem failure"), { code: "EPERM" });
       } catch (error) {
         if (!isNotFoundError(error)) throw error;
       }
@@ -127,6 +127,32 @@ describe("WriteChangesService", () => {
     });
 
     await expect(access(join(fixture.root, "docs", "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("rawFetch");
+  });
+
+  test("rejects stale grouped-edit expected_old_sha256 before applying any changes", async () => {
+    const fixture = await createRepoFixture();
+    const service = createService(fixture.root, { enabled: true, allowed_globs: ["docs/**", "src/**"] });
+
+    await expect(service.apply({
+      changes: [
+        { type: "write", path: "docs/applied-a.md", content: "A\n" },
+        {
+          type: "edit",
+          path: "src/app.ts",
+          expected_old_sha256: "0".repeat(64),
+          edits: [{ type: "replace", find: "rawFetch", replace: "safeFetch" }]
+        }
+      ]
+    })).rejects.toMatchObject({
+      code: "WRITE_STALE_EXPECTED_SHA",
+      diagnostics: {
+        failed_path: "src/app.ts",
+        expected_old_sha256: "0".repeat(64)
+      }
+    });
+
+    await expect(access(join(fixture.root, "docs", "applied-a.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(fixture.root, "src", "app.ts"), "utf8")).resolves.toContain("rawFetch");
   });
 
@@ -465,7 +491,9 @@ describe("WriteChangesService", () => {
       message: "Atomic edit pack failed and was rolled back.",
       diagnostics: {
         rolled_back_paths: ["docs/atomic-marker.md"],
-        failed_path: "docs/guide.md"
+        failed_path: "docs/guide.md",
+        failed_change_index: 1,
+        cause_code: "EPERM"
       }
     });
 

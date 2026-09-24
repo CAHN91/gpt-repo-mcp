@@ -50,6 +50,8 @@ export const FileContentSchema = z.object({
   language: z.string().optional(),
   size_bytes: z.number().int().nonnegative(),
   sha256: z.string(),
+  newline_style: z.enum(["lf", "crlf", "cr", "mixed", "none"]).describe("Original on-disk newline style; returned text is normalized to LF."),
+  has_final_newline: z.boolean().describe("Whether the original file ended with a newline sequence."),
   total_lines: z.number().int().nonnegative(),
   start_line: z.number().int().positive(),
   end_line: z.number().int().positive(),

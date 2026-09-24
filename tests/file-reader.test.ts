@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { FileReader } from "../src/services/file-reader.js";
@@ -19,6 +20,21 @@ describe("FileReader", () => {
     expect(result.end_line).toBe(2);
     expect(result.text).toBe("  return fetch('/api/users');");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.newline_style).toBe("lf");
+    expect(result.has_final_newline).toBe(true);
+  });
+
+  test("reports original CRLF style while returning LF-normalized text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gpt-repo-file-reader-crlf-"));
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(root, "docs", "crlf.txt"), "one\r\ntwo\r\n");
+    const reader = new FileReader(new PathSandbox(root));
+
+    const result = await reader.read({ path: "docs/crlf.txt" });
+
+    expect(result.newline_style).toBe("crlf");
+    expect(result.has_final_newline).toBe(true);
+    expect(result.text).toBe("one\ntwo\n");
   });
 
   test("blocks secret candidates even when default excludes are overridden", async () => {

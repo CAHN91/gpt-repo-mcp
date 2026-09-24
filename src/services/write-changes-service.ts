@@ -73,7 +73,7 @@ export class WriteChangesService {
           }
         } catch (error) {
           const rollback = await rollbackAppliedPaths(this.root, snapshots, appliedPaths);
-          throw atomicFailure(error, rollback, change.path);
+          throw atomicFailure(error, rollback, change.path, index);
         }
       }
     }
@@ -110,11 +110,20 @@ export class WriteChangesService {
         ? { expected_missing: true }
         : { expected_old_sha256: preview.old_sha256 }
       : {};
+    const callerGuard = {
+      ...(typeof change.expected_old_sha256 === "string"
+        ? { expected_old_sha256: change.expected_old_sha256 }
+        : {}),
+      ...(typeof change.expected_missing === "boolean"
+        ? { expected_missing: change.expected_missing }
+        : {})
+    };
     return change.type === "edit"
       ? this.writer.writeGroupedEdit({
           path: change.path,
           edits: change.edits,
           dry_run: dryRun,
+          ...callerGuard,
           ...transactionGuard
         })
       : this.writer.write(toWriteFileInput(change, dryRun, transactionGuard));
@@ -274,15 +283,22 @@ async function rollbackAppliedPaths(
 function atomicFailure(
   error: unknown,
   rollback: { rolledBackPaths: string[]; failedPaths: string[] },
-  failedPath: string
+  failedPath: string,
+  failedChangeIndex: number
 ): RepoReaderError {
   const normalizedFailedPath = safeFailedPath(failedPath);
+  const causeCode = safeErrorCode(error);
+  const commonDiagnostics = {
+    rolled_back_paths: rollback.rolledBackPaths,
+    ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {}),
+    failed_change_index: failedChangeIndex,
+    ...(causeCode ? { cause_code: causeCode } : {})
+  };
   if (rollback.failedPaths.length > 0) {
     return new RepoReaderError("INTERNAL_ERROR", "Atomic edit pack failed and rollback was incomplete.", {
       diagnostics: {
         applied_paths: rollback.failedPaths,
-        rolled_back_paths: rollback.rolledBackPaths,
-        ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {}),
+        ...commonDiagnostics,
         recovery_hint: PARTIAL_FAILURE_RECOVERY_HINT
       }
     });
@@ -292,17 +308,25 @@ function atomicFailure(
       retryable: error.retryable,
       diagnostics: {
         ...error.diagnostics,
-        rolled_back_paths: rollback.rolledBackPaths,
-        ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {})
+        ...commonDiagnostics
       }
     });
   }
   return new RepoReaderError("INTERNAL_ERROR", "Atomic edit pack failed and was rolled back.", {
     diagnostics: {
-      rolled_back_paths: rollback.rolledBackPaths,
-      ...(normalizedFailedPath ? { failed_path: normalizedFailedPath } : {})
+      ...commonDiagnostics
     }
   });
+}
+
+function safeErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code)
+    ? code
+    : undefined;
 }
 
 function safeFailedPath(path: string): string | undefined {
